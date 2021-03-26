@@ -41,6 +41,7 @@ tests/tests_tt_dir/
 processed/
 raw/
 memo/algos/wandb/
+memo/expert_data/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

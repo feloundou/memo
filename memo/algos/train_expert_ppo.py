@@ -134,12 +134,6 @@ def ppo(env_fn,
     var_counts = tuple(count_vars(module) for module in [ac.pi, ac.v])
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n' % var_counts)
 
-    # print("Agent parameters")
-    # print("Learn penalty:", agent.learn_penalty)
-    # print("Use penalty:", agent.use_penalty)
-    # print("Objective penalized:", agent.objective_penalized)
-    # print("Reward penalized:", agent.reward_penalized)
-
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
     # buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
@@ -151,8 +145,8 @@ def ppo(env_fn,
 
     penalty = np.log(max(np.exp(penalty_init)-1, 1e-8))
 
-    mov_avg_ret = 0
-    mov_avg_cost = 0
+    mov_avg_ret, mov_avg_cost = 0, 0
+
 
     # Set up function for computing PPO policy loss
     def compute_loss_pi(data):
