@@ -26,7 +26,7 @@ wheels/
 *.egg
 MANIFEST
 
-# Lightning /research  
+# /research  
 test_tube_exp/
 tests/tests_tt_dir/
 tests/save_dir
@@ -40,6 +40,7 @@ tests/save_dir
 tests/tests_tt_dir/
 processed/
 raw/
+memo/algos/wandb/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -106,11 +107,11 @@ ENV/
 env.bak/
 venv.bak/
 
-# Spyder project settings
+# Spyder memo settings
 .spyderproject
 .spyproject
 
-# Rope project settings
+# Rope memo settings
 .ropeproject
 
 # mkdocs documentation
@@ -123,7 +124,7 @@ venv.bak/
 .idea
 .vscode
 
-# seed project
+# seed memo
 lightning_logs/
 MNIST
 .DS_Store

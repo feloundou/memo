@@ -3,14 +3,13 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='project',
+    name='MEMO',
     version='0.0.0',
-    description='Describe Your Cool Project',
-    author='',
-    author_email='',
-    # REPLACE WITH YOUR OWN GITHUB PROJECT LINK
-    url='https://github.com/PyTorchLightning/pytorch-lightning-conference-seed',
-    install_requires=['pytorch-lightning'],
+    description='Multiple Experts, Multiple Objectives',
+    author='Florentine (Tyna) Eloundou',
+    author_email='mfe25@cornell.edu',
+    url='https://github.com/feloundou/memo',
+    install_requires=['pytorch'],
     packages=find_packages(),
 )
 
