@@ -152,14 +152,13 @@ class Expert(Agent):
         self.max_steps = 1000
 
         # Paths
-        # self._memo_dir = '/home/tyna/Documents/openai/research-memo/'
-        self._memo_dir = '/home/tyna/Documents/safe-experts/'
-        self._root_data_path = self._memo_dir + 'data/'
-        self._expert_path = self._memo_dir + 'expert_data/'
-        self._clone_path = self._memo_dir + 'clone_data/'
-        self._demo_dir = os.path.join(self._expert_path, self.config_name + '_episodes/')
+
+        self._memo_dir = osp.abspath(osp.dirname(osp.dirname(__file__)))
+        self._root_data_path = osp.join(self._memo_dir, 'data')
+        self._expert_path = osp.join(self._memo_dir, 'expert_data')
+        self._clone_path = osp.join(self._memo_dir, 'clone_data')
+        self._demo_dir = osp.join(self._expert_path, self.config_name + '_episodes/')
         self.file_name = 'ppo_penalized_' + self.config_name + '_128x4'
-        # self.benchmark_memo_name = 'clone_benchmarking_' + self.config_name
 
         # Special function to avoid certain slowdowns from PyTorch + MPI combo.
         setup_pytorch_for_mpi()
@@ -348,8 +347,8 @@ class Expert(Agent):
             print(colorize("Pulling saved expert %s trajectories from file over %d episodes" %
                            (self.config_name, expert_episodes), 'blue', bold=True))
 
-            m_file = self._expert_path + self.config_name + '_episodes/memory_data_' + str(
-                int(expert_episodes)) + '_buffer.pkl'
+            m_file = osp.join(self._expert_path , self.config_name + '_episodes/memory_data_' + str(
+                int(expert_episodes)) + '_buffer.pkl')
 
             file_m = open(m_file, 'rb')
             memory = pickle.load(file_m)
