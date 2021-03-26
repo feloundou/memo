@@ -1,0 +1,68 @@
+{
+    "ac_kwargs":	{
+        "hidden_sizes":	[
+            128,
+            128,
+            128,
+            128
+        ]
+    },
+    "actor_critic":	"MLPActorCritic",
+    "agent":	{
+        "<agent_types.PPOAgent object at 0x7f6ae2d617c0>":	{
+            "clip_ratio":	0.2,
+            "kl_margin":	1.2,
+            "params":	{
+                "clipped_adv":	true,
+                "constrained":	false,
+                "first_order":	true
+            },
+            "pi_iters":	80,
+            "pi_lr":	0.0003
+        }
+    },
+    "clip_ratio":	0.2,
+    "constrain_mode":	true,
+    "cost_gamma":	0.99,
+    "cost_lam":	0.97,
+    "cost_lim":	50,
+    "ent_reg":	0.0,
+    "env_fn":	"<function <lambda> at 0x7f6ae2d48280>",
+    "epochs":	1000,
+    "exp_name":	"ppo_penalized_marigold_20Ks_1Ke_128x4",
+    "gamma":	0.99,
+    "hazards_cost":	1,
+    "lam":	0.98,
+    "logger":	{
+        "<spinup_utils.EpochLogger object at 0x7f6ae1cea430>":	{
+            "epoch_dict":	{},
+            "exp_name":	"ppo_penalized_marigold_20Ks_1Ke_128x4",
+            "first_row":	true,
+            "log_current_row":	{},
+            "log_headers":	[],
+            "output_dir":	"/home/tyna/research-project/data/ppo_penalized_marigold_20Ks_1Ke_128x4/ppo_penalized_marigold_20Ks_1Ke_128x4_s0",
+            "output_file":	{
+                "<_io.TextIOWrapper name='/home/tyna/research-project/data/ppo_penalized_marigold_20Ks_1Ke_128x4/ppo_penalized_marigold_20Ks_1Ke_128x4_s0/progress.txt' mode='w' encoding='UTF-8'>":	{
+                    "mode":	"w"
+                }
+            }
+        }
+    },
+    "logger_kwargs":	{
+        "exp_name":	"ppo_penalized_marigold_20Ks_1Ke_128x4",
+        "output_dir":	"/home/tyna/research-project/data/ppo_penalized_marigold_20Ks_1Ke_128x4/ppo_penalized_marigold_20Ks_1Ke_128x4_s0"
+    },
+    "max_ep_len":	1000,
+    "modify_env":	true,
+    "penalty_init":	1.0,
+    "penalty_lr":	0.025,
+    "pi_lr":	0.0003,
+    "reward_goal":	1,
+    "save_every":	10,
+    "seed":	0,
+    "steps_per_epoch":	20000,
+    "target_kl":	0.01,
+    "train_pi_iters":	100,
+    "train_v_iters":	100,
+    "vf_lr":	0.001
+}
