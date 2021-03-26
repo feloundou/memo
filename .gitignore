@@ -42,6 +42,8 @@ processed/
 raw/
 memo/algos/wandb/
 memo/expert_data/
+memo/algos/videos/
+memo/algos/recording/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
