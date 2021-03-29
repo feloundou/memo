@@ -127,8 +127,6 @@ class MEMOActor(nn.Module):
                         nn.ReLU(),
                         # nn.Tanh(),
                         nn.Linear(hidden_size, action_dim))
-                        # nn.LeakyReLU())
-                        # nn.Tanh())
 
         log_std = -0.5 * np.ones(action_dim, dtype=np.float32)
         self.log_std = nn.Parameter(torch.as_tensor(log_std))
@@ -150,26 +148,22 @@ class MEMO(nn.Module):
     """Multiple Experts, Multiple Objectives;
     """
     def __init__(self, obs_dim, latent_dim, out_dim, encoder_hidden, decoder_hidden):
+        '''
+
+        :param obs_dim:
+        :param latent_dim:
+        :param out_dim:
+        :param encoder_hidden:
+        :param decoder_hidden:
+        '''
         super(MEMO, self).__init__()
-        """
-        Given input tensor, forward prop to get context samples, raw state and state differences.
-        Returns latent variable
-        :param obs_dim: state dimension
-        :param latent_length: latent vector length
-        """
-        concat_state_size = [obs_dim] + encoder_hidden
-        test_dim = 400
+        self.found_contexts = []
 
         self.num_embeddings = 10
-        #10  #latent dimension   #num_embeddings = 2
         self.embedding_dim = obs_dim
-        # self.vq_encoder = VQEncoder(obs_dim, encoder_sizes[-1])  # original
         self.vq_encoder = VQEncoder(obs_dim, self.embedding_dim)  # original
+
         self.prenet = nn.Linear(self.embedding_dim, self.embedding_dim)
-
-        # self.vq_encoder = VQEncoder(obs_dim, test_dim)  # original
-        # self.prenet = nn.Linear(test_dim, test_dim)
-
         self.vector_quantizer = VectorQuantizer(self.num_embeddings, self.embedding_dim)
         self.postnet = nn.Linear(self.embedding_dim, encoder_hidden[-1])
         self.vq_decoder = VQDecoder(encoder_hidden[-1], obs_dim)
@@ -180,9 +174,21 @@ class MEMO(nn.Module):
 
 
     def compute_quantized_loss(self, state, delta_state, actions):
-        delta_state_enc = self.vq_encoder(delta_state)
-        encoder_output = self.prenet(delta_state_enc)
+        '''
+
+        :param state:
+        :param delta_state:
+        :param actions:
+        :return:
+        '''
+
+        delta_state_enc = self.vq_encoder(delta_state)   # In: [B, OBS_DIM]; Out: # [B, OBS_DIM]
+        encoder_output = self.prenet(delta_state_enc)  # In: [B, OBS_DIM]; Out:  # [B, OBS_DIM]
+
         quantized, categorical_proposal = self.vector_quantizer(encoder_output)
+
+        # update the set of known contexts
+        self.found_contexts = set([t.data.item() for t in categorical_proposal])
 
         # Straight Through Estimator (Some Magic)
         st_quantized = encoder_output + (quantized - encoder_output).detach()
@@ -193,12 +199,8 @@ class MEMO(nn.Module):
         # print("Reconstruction: ", reconstruction)
 
         categorical_proposal_reshape = torch.reshape(categorical_proposal, (-1, 1))
-        # print("cat reshape", categorical_proposal_reshape)
-        # print("con dim", con_dim)
         categorical_proposal_onehot = F.one_hot(categorical_proposal_reshape, 10).squeeze().float()
-        # print("one hot categorical proposal", categorical_proposal_onehot)
 
-        # concat_state_vq = torch.cat([state, categorical_proposal_reshape], dim=-1)
         concat_state_vq = torch.cat([state, categorical_proposal_onehot], dim=-1)
         action_vq_dist = self.decoder(concat_state_vq)
         # print("Action Distribution: ", action_vq_dist)
@@ -217,10 +219,10 @@ class MEMO(nn.Module):
         Given input tensor, forward propagate, compute the loss, and backward propagate.
         Represents the lifecycle of a single iteration
         :param x: Raw state tensor
-        :param delta_x: State difference tensor
+        :param Delta_x: State difference tensor
         :param a: Action tensor
-        :param context_sample: randomly generated one-hot encoded context label proposals
         :param kl_beta: KL divergence temperance factor
+        :param recon_gamma: State weights
         : Important to note that both recon and context loss cannot be negative.
         """
         encoder_output, quantized, reconstruction, vq_latent_labels, action_vq_dist =\
@@ -230,7 +232,7 @@ class MEMO(nn.Module):
         vq_total_loss, recons_loss, vq_loss, commitment_loss = vq_criterion(Delta_X, encoder_output, quantized, reconstruction)
 
         # original formula
-        recon_loss = -action_vq_dist.log_prob(A).sum(axis=-1)# kl_beta*kl_beta  ### THIS RECON LOSS WORKS
+        recon_loss = -action_vq_dist.log_prob(A).sum(axis=-1)
         recon_loss *= recon_gamma
 
         vq_cat_loss = vq_total_loss*kl_beta
@@ -288,22 +290,24 @@ class VectorQuantizer(nn.Module):
     def __init__(self, num_embeddings, embedding_dim):
         super().__init__()
 
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings  # E_N
+        print("num embed: ", self.num_embeddings)
+        self.embedding_dim = embedding_dim    # E_D
+        print("embed dim: ", self.embedding_dim)
         self.embeddings = nn.Embedding(num_embeddings, embedding_dim)
 
-        self.scale = 1. / self.num_embeddings
+        self.scale = 1. / self.num_embeddings  # scalar
         print("Quantizer Scale: ", self.scale)
         nn.init.uniform_(self.embeddings.weight, -self.scale, self.scale)
 
     def proposal_distribution(self, input):
-        input_shape = input.shape
-
-        flatten_input = input.flatten(end_dim=-2).contiguous()
+        input_shape = input.shape  # [B, OBS_DIM]
+        flatten_input = input.flatten(end_dim=-2).contiguous()  # [B, OBS_DIM]
 
         distances = (flatten_input ** 2).sum(dim=1, keepdim=True)
         distances = distances + (self.embeddings.weight ** 2).sum(dim=1)
         distances -= 2 * flatten_input @ self.embeddings.weight.t()
+        print("distances 3", distances)
 
         categorical_posterior = torch.argmin(distances, dim=-1, keepdim=True).view(input_shape[:-1])
         return categorical_posterior

@@ -65,10 +65,6 @@ def memo_valor(env_fn,
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
 
-    # name = input("What is your name? ")
-    # if (name != ""):
-    #     # Print welcome message if the value is not empty
-    #     print("Hello %s, welcome to playing with VAELOR" % name)
 
     # Model    # Create discriminator and monitor it
     con_dim = len(memories)
@@ -154,13 +150,12 @@ def memo_valor(env_fn,
         logger.log_tabular('Time', time.time() - start_time)
         logger.dump_tabular()
 
-#########
-    # Run eval
-    print("RUNNING Classification EVAL")
-    memo.eval()
+    print("Finished training, and detected %d contexts!" % len(memo.found_contexts))
 
-    # fake_o = context_dist.sample((eval_batch_size*len(memories),))  #eval batch size for each expert type
-    # fake_o_onehot = F.one_hot(fake_o, con_dim).squeeze().float()
+########
+    # Run eval
+    print("Running Classification Eval")
+    memo.eval()
 
     # Randomize and fetch an evaluation sample
     eval_raw_states_batch, eval_delta_states_batch, eval_actions_batch, eval_sampled_experts = \
@@ -182,39 +177,42 @@ def memo_valor(env_fn,
         y_true=np.array(ground_truth), preds=np.array(predictions), class_names=class_names)})
 
 
-# ###############
-    print("RUNNING POLICY EVAL")
-
-    # unroll and plot a full episode
-    expert_path_images, expert_action_images, images_traj, images_actions, expert_traj_data=\
-        run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=['marigold', 'rose', 'circle'],
-                      num_episodes=1,
-                     contexts=10, seed=0, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'))
-
-    marigold_dist_table = wandb.Table(data=expert_traj_data[0], columns=["label", "value"])
-    rose_dist_table = wandb.Table(data=expert_traj_data[1], columns=["label", "value"])
-    circle_dist_table = wandb.Table(data=expert_traj_data[2], columns=["label", "value"])
-
-    wandb.log({"Expert paths": [wandb.Image(asarray(expert_path_images[0]), caption="Marigold path"),
-                                wandb.Image(asarray(expert_path_images[1]), caption="Rose path"),
-                                wandb.Image(asarray(expert_path_images[2]), caption="Circle path")],
-               "Learners paths": [wandb.Image(asarray(img), caption="Learners path") for img in images_traj],
-               "Expert actions": [wandb.Image(asarray(expert_action_images[0]), caption="Marigold actions"),
-                                  wandb.Image(asarray(expert_action_images[1]), caption="Rose actions"),
-                                  wandb.Image(asarray(expert_action_images[2]), caption="Circle actions")
-                                  ],
-               "Learners actions": [wandb.Image(asarray(img), caption="Learners actions") for img in images_actions],
-               "Marigold Dist": wandb.plot.bar(marigold_dist_table, "label", "value", title="Marigold Distances"),
-               "Rose Dist": wandb.plot.bar(rose_dist_table, "label", "value", title="Rose Distances"),
-               "Circle Dist": wandb.plot.bar(circle_dist_table, "label", "value", title="Circle Distances"),
-               })
-
-
+# # ###############
+#     print("RUNNING POLICY EVAL")
+#
+#     # unroll and plot a full episode
+#     expert_path_images, expert_action_images, images_traj, images_actions, expert_traj_data=\
+#         run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=['marigold', 'rose', 'circle'],
+#                       num_episodes=1,
+#                      contexts=10, seed=0, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'))
+#
+#     marigold_dist_table = wandb.Table(data=expert_traj_data[0], columns=["label", "value"])
+#     rose_dist_table = wandb.Table(data=expert_traj_data[1], columns=["label", "value"])
+#     circle_dist_table = wandb.Table(data=expert_traj_data[2], columns=["label", "value"])
+#
+#     wandb.log({"Expert paths": [wandb.Image(asarray(expert_path_images[0]), caption="Marigold path"),
+#                                 wandb.Image(asarray(expert_path_images[1]), caption="Rose path"),
+#                                 wandb.Image(asarray(expert_path_images[2]), caption="Circle path")],
+#                "Learners paths": [wandb.Image(asarray(img), caption="Learners path") for img in images_traj],
+#                "Expert actions": [wandb.Image(asarray(expert_action_images[0]), caption="Marigold actions"),
+#                                   wandb.Image(asarray(expert_action_images[1]), caption="Rose actions"),
+#                                   wandb.Image(asarray(expert_action_images[2]), caption="Circle actions")
+#                                   ],
+#                "Learners actions": [wandb.Image(asarray(img), caption="Learners actions") for img in images_actions],
+#                "Marigold Dist": wandb.plot.bar(marigold_dist_table, "label", "value", title="Marigold Distances"),
+#                "Rose Dist": wandb.plot.bar(rose_dist_table, "label", "value", title="Rose Distances"),
+#                "Circle Dist": wandb.plot.bar(circle_dist_table, "label", "value", title="Circle Distances"),
+#                })
+#
+#
 # ####
 #     print("Running Quantitative Eval")
-#     learner_rewards, learner_costs = run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=['marigold', 'rose'],
+#     expert_rewards, expert_costs, learner_rewards, learner_costs = \
+#         run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=['marigold', 'rose'],
 #                                                    num_episodes=5, contexts=10, seed=0, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'),
 #                                                    eval_type="quantitative")
+#
+#
 #
 #     print("Learner rewards", learner_rewards)
 #     print("Learner costs", learner_costs)

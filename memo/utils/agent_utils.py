@@ -375,8 +375,7 @@ class Expert(Agent):
             print("Hello, Simulator for !", self.config_name)
 
             if mode == "demo":
-                self.simulator = ExpertSinglePathSimulator('Safexp-PointGoal1-v0',
-                                expert_pi, n_trajectories, trajectory_len, mode="demo", demo_pi=demo_pi)
+                self.simulator = ExpertSinglePathSimulator('Safexp-PointGoal1-v0', expert_pi, n_trajectories, trajectory_len, mode="demo", demo_pi=demo_pi)
 
             else:
                 self.simulator = ExpertSinglePathSimulator('Safexp-PointGoal1-v0',

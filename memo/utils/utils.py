@@ -808,22 +808,15 @@ def run_memo_policies(env, get_action, context_label=0, max_ep_len=None,
         ep_cost += info['cost']
 
         if d or (ep_len == max_ep_len):
-            # logger.store(EpRet=ep_ret, EpLen=ep_len)
             cum_reward[n] = [ep_ret, n]
             cum_cost[n] = [ep_cost, n]
-            # if eval_type == "quant" and mode=="expert":
-            #     log_metrics = {'expert cum. costs': cum_cost, 'expert cum. rewards': cum_reward}
-            #     wandb.log(log_metrics)
-            # if eval_type == "quant" and mode=="student":
-            #     log_metrics = {'memo cum. costs': cum_cost, 'memo cum. rewards': cum_reward}
-            #     wandb.log(log_metrics)
+
             print('Episode %d \t EpRet %.3f \t EpCost %.3f \t EpLen %d' % (n, ep_ret, ep_cost, ep_len))
             o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
             n += 1
 
-
     # return actions
-    if eval_type == "quant":
+    if eval_type == "quantitative":
         return cum_reward, cum_cost
     return actions, bot_pos, goal_pos
 
@@ -842,6 +835,14 @@ white  = '#FFFFFF'
 
 def _path_plot_helper(dir, name, df):
     plot = (ggplot(df) + aes(x="x", y="y") + geom_path(aes(colour='df.index'), size=1.5) + scale_color_cmap('spring') +
+            theme(rect=element_rect(color=white, fill="#1C1B4B")))
+    plot.save(osp.join(dir, name), dpi=100)
+    path_image = Image.open(osp.join(dir, name))
+    return path_image
+
+
+def _line_plot_helper(dir, name, df):
+    plot = (ggplot(df) + aes(x="x", y="y") + geom_line(size=1.5) + scale_color_cmap('spring') +
             theme(rect=element_rect(color=white, fill="#1C1B4B")))
     plot.save(osp.join(dir, name), dpi=100)
     path_image = Image.open(osp.join(dir, name))
@@ -908,7 +909,26 @@ def run_memo_eval(exp_name, experts, num_episodes, contexts, seed, env_fn, eval_
     traj_labels = [*['L' + str(i) for i in range(10)]]
 
     if eval_type == "quantitative":
+        ExpertRewards, ExpertCosts, = [[] for i in range(len(experts))], [[] for i in range(len(experts))]
         LearnerRewards, LearnerCosts, = [[] for i in range(10)], [[] for i in range(10)]
+
+        # Run Expert episodes
+        for exp in range(len(experts)):
+            mode = pi_types[exp]
+            if mode == 'policy':
+                _, expert_pi = load_policy_and_env(
+                    osp.join(_root_data_path, expert_file_names[exp], expert_file_names[exp] + '_s0/'),
+                    'last', False)
+            else:
+                def circle_policy_func(o):
+                    return circle_policy
+
+                expert_pi = circle_policy_func
+
+            ExpertRewards[exp], ExpertCosts[exp] = \
+                (run_memo_policies(env, expert_pi, max_ep_len=1000,
+                                   num_episodes=num_episodes, mode="expert",
+                                   render=False, env_seed=config_seed, eval_type=eval_type))
 
         # Run Learner episodes
         for k in range(contexts):
@@ -916,9 +936,9 @@ def run_memo_eval(exp_name, experts, num_episodes, contexts, seed, env_fn, eval_
             LearnerRewards[k], LearnerCosts[k] = \
                 run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000,
                                   num_episodes=num_episodes, mode="student",
-                                  render=False, env_seed=config_seed, eval_type="quant")
+                                  render=False, env_seed=config_seed, eval_type=eval_type)
 
-        return LearnerRewards, LearnerCosts
+        return ExpertRewards, ExpertCosts, LearnerRewards, LearnerCosts
 
     else:
         # Run Learner episodes

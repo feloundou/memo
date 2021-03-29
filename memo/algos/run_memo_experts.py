@@ -77,16 +77,17 @@ mpi_fork(cpu)
 logger_kwargs = setup_logger_kwargs(exp_name, 0)
 
 # Good run: exp_name: memo-marigold-rose: https://wandb.ai/openai-scholars/MEMO/runs/h8755blk?workspace=user-feloundou
-memo_valor(lambda: gym.make(ENV_NAME),
+memo = memo_valor(lambda: gym.make(ENV_NAME),
            seed=0,
            # seed=123,  # some intuition.
            vaelor_kwargs=dict(encoder_hidden=[1000],
                               # decoder_hidden=[1000]),
                               decoder_hidden=[512]),
            annealing_kwargs=dict(start=0., stop=1., n_cycle=1, ratio=0.5),
-           episodes_per_epoch=100,   # fix reward accumulation
+           # episodes_per_epoch=100,   # fix reward accumulation
+           episodes_per_epoch=15,   # fix reward accumulation
            max_ep_len=ep_len_config,
-           epochs=10000,
+           epochs=50,
            warmup=500,
            train_valor_iters=50,
            # vae_lr=1e-5,  # ideal
@@ -99,6 +100,10 @@ memo_valor(lambda: gym.make(ENV_NAME),
             # memories=[marigold_expert.memory, rose_expert.memory]
            memories=[marigold_expert.memory, rose_expert.memory,
                      circle_expert.memory])
+
+
+# 4. Evaluate
+# def run_memo_eval(model):
 
 # Some tips to train MEMO:
 # 1. # Warmup improves it
