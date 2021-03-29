@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from memo.algos.demo_policies import spinning_top_policy, circle_policy, square_policy, \
+    forward_policy, back_forth_policy, forward_spin_policy
 
 # from cpprb import ReplayBuffer, create_before_add_func
 import wandb
@@ -154,9 +156,9 @@ class Expert(Agent):
         # Paths
 
         self._memo_dir = osp.abspath(osp.dirname(osp.dirname(__file__)))
-        self._root_data_path = osp.join(self._memo_dir, 'data')
-        self._expert_path = osp.join(self._memo_dir, 'expert_data')
-        self._clone_path = osp.join(self._memo_dir, 'clone_data')
+        self._root_data_path = osp.join(self._memo_dir, 'data/')
+        self._expert_path = osp.join(self._memo_dir, 'expert_data/')
+        self._clone_path = osp.join(self._memo_dir, 'clone_data/')
         self._demo_dir = osp.join(self._expert_path, self.config_name + '_episodes/')
         self.file_name = 'ppo_penalized_' + self.config_name + '_128x4'
 
@@ -332,7 +334,8 @@ class Expert(Agent):
                 wandb.finish()
 
 
-    def run_expert_sim(self, env, get_from_file, max_cost=None, min_reward=None, episode_split=[1,1], expert_episodes=1000, replay_buffer_size=10000, seeds=[0]):
+    def run_expert_sim(self, env, get_from_file, max_cost=None, min_reward=None, episode_split=[1,1], expert_episodes=1000, replay_buffer_size=10000,
+                       mode="trained", demo_pi=circle_policy, seeds=[0]):
         """Episode split [number of episodes per iteration, number of iterations]"""
         obs_dim = env.observation_space.shape
         act_dim = env.action_space.shape
@@ -363,74 +366,31 @@ class Expert(Agent):
                 self.config_name, expert_episodes), 'blue', bold=True))
 
             # Load trained policy
-            _, expert_pi = load_policy_and_env(osp.join(self._root_data_path, self.file_name, self.file_name + '_s0/'),
-                                                'last', False)
+            if mode == "demo":
+                expert_pi = demo_pi
+            else:
+                _, expert_pi = load_policy_and_env(osp.join(self._root_data_path, self.file_name, self.file_name + '_s0/'),
+                                                    'last', False)
 
             print("Hello, Simulator for !", self.config_name)
 
-            self.simulator = ExpertSinglePathSimulator('Safexp-PointGoal1-v0',
+            if mode == "demo":
+                self.simulator = ExpertSinglePathSimulator('Safexp-PointGoal1-v0',
+                                expert_pi, n_trajectories, trajectory_len, mode="demo", demo_pi=demo_pi)
+
+            else:
+                self.simulator = ExpertSinglePathSimulator('Safexp-PointGoal1-v0',
                                                        expert_pi, n_trajectories, trajectory_len)
 
             print("running the simulation and saving to 'memory' ")
-            # all_memories = []
             AggTraj = None
             n_iter = episode_split[1]
 
             for i in range(n_iter):
-                self.memory, traj = self.simulator.run_sim(sampling_mode=False, seed=seeds[i])
+                self.memory, traj = self.simulator.run_sim(sampling_mode=False, seed=seeds[i], mode=mode, demo_pi=demo_pi)
                 AggTraj = traj if AggTraj is None else np.append(AggTraj, traj)
 
             BigMemory = Buffer(AggTraj)
             bufname_pk = self._expert_path + self.config_name + '_episodes/memory_data_' + str(int(n_trajectories*n_iter)) + '_buffer.pkl'
             file_pi = open(bufname_pk, 'wb')
             pickle.dump(BigMemory, file_pi)
-
-            # self.memory, traj = self.simulator.run_sim(sampling_mode=False, seed=0)
-
-            # all_rewards, all_costs = [], []
-            #
-            # for k in range(n_trajectories):
-            #     all_rewards.append(torch.stack(self.memory[k].rewards, dim=0).sum(dim=0).item())
-            #     all_costs.append(torch.stack(self.memory[k].costs, dim=0).sum(dim=0).item())
-            #
-            # print("All memory rewards: ",  [round(num, 2) for num in all_rewards] )
-            # print("All memory costs: ", [round(num, 2) for num in all_costs])
-
-            # Save to pickle
-            # bufname_pk = self._expert_path + self.config_name + '_episodes/memory_data_' + str(int(n_trajectories)) + '_buffer.pkl'
-            # file_pi = open(bufname_pk, 'wb')
-            # pickle.dump(self.memory, file_pi)
-
-            # # second
-            # self.memory2, traj2 = self.simulator.run_sim(sampling_mode=False, seed=444)
-            # all_rewards, all_costs = [], []
-            # for k in range(n_trajectories):
-            #     all_rewards.append(torch.stack(self.memory2[k].rewards, dim=0).sum(dim=0).item())
-            #     all_costs.append(torch.stack(self.memory2[k].costs, dim=0).sum(dim=0).item())
-            #
-            # print("All memory rewards: ", [round(num, 2) for num in all_rewards])
-            # print("All memory costs: ", [round(num, 2) for num in all_costs])
-
-            # # Save to pickle
-            # bufname_pk = self._expert_path + self.config_name + '_episodes/memory2_data_' + str(
-            #     int(n_trajectories)) + '_buffer.pkl'
-            # file_pi = open(bufname_pk, 'wb')
-            # pickle.dump(self.memory, file_pi)
-
-
-
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#

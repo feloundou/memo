@@ -106,7 +106,7 @@ class MLPActorCritic(nn.Module):
     def step(self, obs):
         with torch.no_grad():
             pi = self.pi._distribution(obs)
-            print("pi dist! ", pi)
+            # print("pi dist! ", pi)
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)

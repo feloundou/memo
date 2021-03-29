@@ -55,7 +55,7 @@ class MLPGaussianActor(Actor):
         super().__init__()
 
         log_std = -0.5 * np.ones(act_dim, dtype=np.float32)
-        self.log_std = torch.nn.Parameter(torch.as_tensor(log_std))
+        self.log_std = nn.Parameter(torch.as_tensor(log_std))
 
         self.mu_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
@@ -98,7 +98,7 @@ class MLPActorCritic(nn.Module):
     def step(self, obs):
         with torch.no_grad():
             pi = self.pi._distribution(obs)
-            print("pi dist! ", pi)
+            # print("pi dist! ", pi)
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
@@ -111,26 +111,27 @@ class MLPActorCritic(nn.Module):
 
 
 class MEMOActor(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, hidden_size, action_dim):
         super(MEMOActor, self).__init__()
         activation = nn.Tanh()
+        hidden_size = 512
 
         self.mu_net = nn.Sequential(
-                        nn.Linear(state_dim, 512),
+                        nn.Linear(state_dim, hidden_size),
                         nn.ReLU(),
                         # nn.Tanh(),
-                        nn.Linear(512, 512),
+                        nn.Linear(hidden_size, hidden_size),
                         nn.ReLU(),
                         # nn.Tanh(),
-                        nn.Linear(512, 512),
+                        nn.Linear(hidden_size, hidden_size),
                         nn.ReLU(),
-                        nn.Tanh(),
-                        nn.Linear(512, action_dim))
+                        # nn.Tanh(),
+                        nn.Linear(hidden_size, action_dim))
                         # nn.LeakyReLU())
                         # nn.Tanh())
 
         log_std = -0.5 * np.ones(action_dim, dtype=np.float32)
-        self.log_std = torch.nn.Parameter(torch.as_tensor(log_std))
+        self.log_std = nn.Parameter(torch.as_tensor(log_std))
 
 
     def _distribution(self, obs):
@@ -140,14 +141,12 @@ class MEMOActor(nn.Module):
 
     def forward(self, obs):
         mu = self.mu_net(obs)
-        # print("Mu: ", mu)
         std = torch.exp(self.log_std)
-        # print("Std: ", std)
         return Normal(mu, std)
 
 
 
-class MEMO(torch.nn.Module):
+class MEMO(nn.Module):
     """Multiple Experts, Multiple Objectives;
     """
     def __init__(self, obs_dim, latent_dim, out_dim, encoder_hidden, decoder_hidden):
@@ -158,27 +157,29 @@ class MEMO(torch.nn.Module):
         :param obs_dim: state dimension
         :param latent_length: latent vector length
         """
-        encoder_sizes = [obs_dim] + encoder_hidden
+        concat_state_size = [obs_dim] + encoder_hidden
+        test_dim = 400
 
-        self.num_embeddings = 10 #10  # latent dimension   # num_embeddings = 2  # 10  # latent dimension
-        # self.num_embeddings = 2
+        self.num_embeddings = 10
+        #10  #latent dimension   #num_embeddings = 2
         self.embedding_dim = obs_dim
-        self.vq_encoder = VQEncoder(obs_dim, encoder_sizes[-1])  # original
+        # self.vq_encoder = VQEncoder(obs_dim, encoder_sizes[-1])  # original
+        self.vq_encoder = VQEncoder(obs_dim, self.embedding_dim)  # original
+        self.prenet = nn.Linear(self.embedding_dim, self.embedding_dim)
 
-        self.prenet = nn.Linear(encoder_sizes[-1], self.embedding_dim)
+        # self.vq_encoder = VQEncoder(obs_dim, test_dim)  # original
+        # self.prenet = nn.Linear(test_dim, test_dim)
+
         self.vector_quantizer = VectorQuantizer(self.num_embeddings, self.embedding_dim)
-        self.postnet = nn.Linear(self.embedding_dim, encoder_sizes[-1])
-        # self.vq_decoder = VQDecoder(encoder_sizes[-1], 200)
-        self.vq_decoder = VQDecoder(encoder_sizes[-1], obs_dim)
-        ###
+        self.postnet = nn.Linear(self.embedding_dim, encoder_hidden[-1])
+        self.vq_decoder = VQDecoder(encoder_hidden[-1], obs_dim)
 
-        # self.encoder = VAE_Encoder(encoder_sizes) # original
-        # self.decoder = VAE_Decoder(obs_dim + 1, decoder_hidden, out_dim, activation=nn.Tanh)
-        self.decoder = MEMOActor(state_dim=obs_dim+1, action_dim=out_dim)
+        # self.decoder = MEMOActor(state_dim=obs_dim+1, action_dim=out_dim)
+        self.decoder = MEMOActor(state_dim=obs_dim + 10, hidden_size=decoder_hidden, action_dim=out_dim)
         self.action_vq_dist = None
 
 
-    def compute_quantized_loss(self, state, delta_state, actions, con_dim):
+    def compute_quantized_loss(self, state, delta_state, actions):
         delta_state_enc = self.vq_encoder(delta_state)
         encoder_output = self.prenet(delta_state_enc)
         quantized, categorical_proposal = self.vector_quantizer(encoder_output)
@@ -192,13 +193,18 @@ class MEMO(torch.nn.Module):
         # print("Reconstruction: ", reconstruction)
 
         categorical_proposal_reshape = torch.reshape(categorical_proposal, (-1, 1))
-        concat_state_vq = torch.cat([state, categorical_proposal_reshape], dim=-1)
+        # print("cat reshape", categorical_proposal_reshape)
+        # print("con dim", con_dim)
+        categorical_proposal_onehot = F.one_hot(categorical_proposal_reshape, 10).squeeze().float()
+        # print("one hot categorical proposal", categorical_proposal_onehot)
+
+        # concat_state_vq = torch.cat([state, categorical_proposal_reshape], dim=-1)
+        concat_state_vq = torch.cat([state, categorical_proposal_onehot], dim=-1)
         action_vq_dist = self.decoder(concat_state_vq)
         # print("Action Distribution: ", action_vq_dist)
         ####
-
         return encoder_output, quantized, reconstruction, categorical_proposal, action_vq_dist
-        # removing latent_vq_dist for lambda
+
 
     def act(self, state, context_label):
         concat_state_vq = torch.cat([state, torch.reshape(torch.as_tensor(context_label), (-1,))], dim=-1)
@@ -206,7 +212,7 @@ class MEMO(torch.nn.Module):
         action = action_vq_dist.sample()
         return action
 
-    def forward(self, X, Delta_X, A, context_sample, con_dim, kl_beta=1., recon_gamma=1.):
+    def forward(self, X, Delta_X, A, kl_beta=1., recon_gamma=1.):
         """
         Given input tensor, forward propagate, compute the loss, and backward propagate.
         Represents the lifecycle of a single iteration
@@ -218,18 +224,14 @@ class MEMO(torch.nn.Module):
         : Important to note that both recon and context loss cannot be negative.
         """
         encoder_output, quantized, reconstruction, vq_latent_labels, action_vq_dist =\
-            self.compute_quantized_loss(X, Delta_X, A, con_dim)
+            self.compute_quantized_loss(X, Delta_X, A)
 
         vq_criterion = VQCriterion(beta=kl_beta)
         vq_total_loss, recons_loss, vq_loss, commitment_loss = vq_criterion(Delta_X, encoder_output, quantized, reconstruction)
 
         # original formula
-        # recon_loss = torch.exp(action_vq_dist.log_prob(A).sum(axis=-1))  # kl_beta*kl_beta
         recon_loss = -action_vq_dist.log_prob(A).sum(axis=-1)# kl_beta*kl_beta  ### THIS RECON LOSS WORKS
-        # recon_loss = -torch.exp(action_vq_dist.log_prob(A).sum(axis=-1))
         recon_loss *= recon_gamma
-        # kl_beta = 1-recon_gamma
-        # kl_beta = 1
 
         vq_cat_loss = vq_total_loss*kl_beta
         loss = recon_loss * vq_cat_loss
@@ -240,18 +242,21 @@ class MEMO(torch.nn.Module):
 
 
 class VQEncoder(nn.Module):
-
-    def __init__(self, in_dim, out_dim,):
+    def __init__(self, in_dim, out_dim):
         super(VQEncoder, self).__init__()
-        # self.logits_net = mlp([in_dim, in_dim//2, out_dim], activation=nn.Tanh)
+        # self.net = nn.Sequential(
+        #     nn.Linear(in_dim, out_dim // 2),
+        #     nn.Tanh(),  # much better than relu
+        #     nn.Linear(out_dim // 2, out_dim)
+        # )
+
         self.net = nn.Sequential(
-            nn.Linear(in_dim, out_dim // 2),
-            # nn.ReLU(inplace=True),
+            nn.Linear(in_dim, out_dim),
             nn.Tanh(),  # much better than relu
-            nn.Linear(out_dim // 2, out_dim)
+            nn.Linear(out_dim, out_dim)
         )
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input):
         return self.net(input)
 
 
@@ -265,26 +270,15 @@ class Clamper(nn.Module):
         return torch.clamp(input, self.min, self.max)
 
 class VQDecoder(nn.Module):
-    def __init__(self, obs_dim, hidden_size):
+    def __init__(self, obs_dim, out_dim):
         super().__init__()
-
-        test_size = 100
-        # test_size=40
+        test_size = 10
 
         self.net = nn.Sequential(
             nn.Linear(obs_dim, test_size),
             nn.Tanh(),
-            # nn.ReLU(inplace=True),
-            # nn.Linear(hidden_size, hidden_size),
-            # nn.Linear(test_size, test_size),
-            # nn.Tanh(),
-            # nn.ReLU(inplace=True),
-            nn.Linear(test_size, hidden_size),
-            nn.Tanh(),
-            # nn.LeakyReLU(inplace=True)
-            # Clamper(-10, 10),
-            # Clamper(-1, 1),
-            # nn.Sigmoid()
+            nn.Linear(test_size, out_dim),
+            nn.Tanh()
         )
     def forward(self, input):
         return self.net(input)
@@ -300,7 +294,7 @@ class VectorQuantizer(nn.Module):
 
         self.scale = 1. / self.num_embeddings
         print("Quantizer Scale: ", self.scale)
-        torch.nn.init.uniform_(self.embeddings.weight, -self.scale, self.scale)
+        nn.init.uniform_(self.embeddings.weight, -self.scale, self.scale)
 
     def proposal_distribution(self, input):
         input_shape = input.shape
@@ -312,8 +306,6 @@ class VectorQuantizer(nn.Module):
         distances -= 2 * flatten_input @ self.embeddings.weight.t()
 
         categorical_posterior = torch.argmin(distances, dim=-1, keepdim=True).view(input_shape[:-1])
-        # print("Categorical posterior: ", categorical_posterior)
-
         return categorical_posterior
 
     def forward(self, input):
@@ -342,6 +334,5 @@ class VQCriterion(nn.Module):
         commitment_loss = F.mse_loss(flatten_encoder_output, flatten_quantized.detach())
 
         total_loss = reconstruction_loss + vq_loss + self.beta * commitment_loss   # Original. TODO: review this loss.
-        # total_loss = reconstruction_loss + self.beta * commitment_loss
 
         return total_loss, reconstruction_loss, vq_loss, commitment_loss

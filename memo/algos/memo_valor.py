@@ -6,21 +6,14 @@ from numpy import asarray
 import safety_gym
 import pandas as pd
 import time, random, torch, wandb
-from torch.distributions import Independent, OneHotCategorical, Categorical
-import torch.nn.functional as F
 import wandb.plot as wplot
 from torch.optim import Adam, SGD, lr_scheduler
 import wandb
-import os
-from plotnine import ggplot, aes, geom_path, geom_smooth
-# import traj_dist
-import traj_dist.distance as tdist
-from memo.utils.utils import run_memo_eval, run_memo_quant
+from memo.utils.utils import run_memo_eval
 
 # (Source: https://github.com/bguillouet/traj-dist/blob/master/traj_dist/)
 from memo.models.neural_nets import MEMO
 from memo.utils.buffer_torch import MemoryBatch
-
 from memo.utils.utils import mpi_fork, proc_id, num_procs, EpochLogger, \
     setup_pytorch_for_mpi, sync_params, mpi_avg_grads, count_vars,  \
     frange_cycle_sigmoid
@@ -35,6 +28,7 @@ def memo_valor(env_fn,
                   seed=0,
                   episodes_per_epoch=40,
                   epochs=50,
+                  warmup=10,
                   train_valor_iters=5,
                   vae_lr=1e-3,
                   train_batch_size=50,
@@ -77,9 +71,7 @@ def memo_valor(env_fn,
     #     print("Hello %s, welcome to playing with VAELOR" % name)
 
     # Model    # Create discriminator and monitor it
-    # con_dim = len(replay_buffers)
     con_dim = len(memories)
-    # con_dim = 10   # con_dim = 1
     memo = vae(obs_dim=obs_dim[0], latent_dim=con_dim, out_dim=act_dim[0], **vaelor_kwargs)
 
     # Set up model saving
@@ -100,19 +92,13 @@ def memo_valor(env_fn,
 
     # Optimizers
     vae_optimizer = Adam(memo.parameters(), lr=vae_lr)
-    pi_optimizer = 0
-
     start_time = time.time()
 
     # Prepare data
     mem = MemoryBatch(memories)
-    # print("Length of one buffer: ", memories[0].length)
 
     transition_states, pure_states, transition_actions, expert_ids = mem.collate()
     valor_l_old, recon_l_old, context_l_old = 0, 0, 0
-
-    # context_dist = OneHotCategorical(logits=torch.Tensor(np.ones(2)))
-    context_dist = Categorical(logits=torch.Tensor(np.ones(con_dim)))
 
     # Main Loop
     kl_beta_schedule = frange_cycle_sigmoid(epochs, **annealing_kwargs)   # kl_beta_schedule = frange_cycle_linear(epochs, n_cycle=10)
@@ -120,29 +106,26 @@ def memo_valor(env_fn,
     for epoch in range(epochs):
         memo.train()
 
-        o_tensor = context_dist.sample((train_batch_size,))
-        o_onehot = F.one_hot(o_tensor, con_dim).squeeze().float()
-
         # Select state transitions and actions at random indexes
+        # print("length transition states", len(transition_states))
         batch_indexes = torch.randint(len(transition_states), (train_batch_size,))
+        # print("batch indexes", batch_indexes)
 
         raw_states_batch, delta_states_batch, actions_batch, sampled_experts = \
            pure_states[batch_indexes], transition_states[batch_indexes], transition_actions[batch_indexes], expert_ids[batch_indexes]
 
         print("Expert IDs: ", sampled_experts)
-        # print("Actual actions: ", actions_batch)
 
-        warmup = 1000
-        recon_gamma = 1e-8 if epoch < warmup else 1    #underweight recognition early on
+        recon_gamma = 1e-8 if epoch < warmup else 1    # underweight recognition early on
 
         # for i in range(train_valor_iters):
         for i in range(local_iter_per_epoch):
-        #     kl_beta = 0 if i > 0 else kl_beta_schedule[epoch]
+            # kl_beta = 0 if i > 0 else kl_beta_schedule[epoch]
             kl_beta = kl_beta_schedule[epoch]
-            # only take context labeling into account for first label
 
-            loss, recon_loss, X, latent_labels, vq_valor_loss = memo(raw_states_batch, delta_states_batch,  actions_batch, o_onehot, con_dim,
-                                                                   kl_beta, recon_gamma)
+            # only take context labeling into account for first label
+            loss, recon_loss, X, latent_labels, vq_valor_loss = memo(raw_states_batch, delta_states_batch,  actions_batch,
+                                                                     kl_beta, recon_gamma)
             vae_optimizer.zero_grad()
             loss.mean().backward()
             mpi_avg_grads(memo)
@@ -155,7 +138,6 @@ def memo_valor(env_fn,
 
         logger.store(VALORLoss=valor_l_new, PolicyLoss=recon_l_new, # ContextLoss=context_l_new,
                      DeltaValorLoss=valor_l_new-valor_l_old, DeltaPolicyLoss=recon_l_new-recon_l_old,
-                     # DeltaContextLoss=context_l_new-context_l_old
                      )
 
         # logger.store(VALORLoss = d_loss)
@@ -177,8 +159,8 @@ def memo_valor(env_fn,
     print("RUNNING Classification EVAL")
     memo.eval()
 
-    fake_o = context_dist.sample((eval_batch_size*len(memories),))  #eval batch size for each expert type
-    fake_o_onehot = F.one_hot(fake_o, con_dim).squeeze().float()
+    # fake_o = context_dist.sample((eval_batch_size*len(memories),))  #eval batch size for each expert type
+    # fake_o_onehot = F.one_hot(fake_o, con_dim).squeeze().float()
 
     # Randomize and fetch an evaluation sample
     eval_raw_states_batch, eval_delta_states_batch, eval_actions_batch, eval_sampled_experts = \
@@ -186,9 +168,8 @@ def memo_valor(env_fn,
 
     # Pass through VAELOR
     loss, recon_loss, _, predicted_expert_labels, _ = memo(eval_raw_states_batch,
-                                                             eval_delta_states_batch,
-                                                             eval_actions_batch,
-                                                             fake_o_onehot, con_dim)
+                                                           eval_delta_states_batch,
+                                                           eval_actions_batch)
 
     ground_truth, predictions = eval_sampled_experts, predicted_expert_labels
 
@@ -205,32 +186,41 @@ def memo_valor(env_fn,
     print("RUNNING POLICY EVAL")
 
     # unroll and plot a full episode
-    marigold_path_image, rose_path_image, marigold_actions_image, rose_actions_image, \
-    images_traj, images_actions, marigold_traj_data, rose_traj_data, marigold_action_data, rose_action_data =\
-        run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=['marigold', 'rose'],
-                     contexts=list(range(10)), seed=7, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'))
+    expert_path_images, expert_action_images, images_traj, images_actions, expert_traj_data=\
+        run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=['marigold', 'rose', 'circle'],
+                      num_episodes=1,
+                     contexts=10, seed=0, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'))
 
-    marigold_dist_table = wandb.Table(data=marigold_traj_data, columns=["label", "value"])
-    rose_dist_table = wandb.Table(data=rose_traj_data, columns=["label", "value"])
+    marigold_dist_table = wandb.Table(data=expert_traj_data[0], columns=["label", "value"])
+    rose_dist_table = wandb.Table(data=expert_traj_data[1], columns=["label", "value"])
+    circle_dist_table = wandb.Table(data=expert_traj_data[2], columns=["label", "value"])
 
-    wandb.log({"Expert paths": [wandb.Image(asarray(marigold_path_image), caption="Marigold path"),
-                                wandb.Image(asarray(rose_path_image), caption="Rose path")],
+    wandb.log({"Expert paths": [wandb.Image(asarray(expert_path_images[0]), caption="Marigold path"),
+                                wandb.Image(asarray(expert_path_images[1]), caption="Rose path"),
+                                wandb.Image(asarray(expert_path_images[2]), caption="Circle path")],
                "Learners paths": [wandb.Image(asarray(img), caption="Learners path") for img in images_traj],
-               "Expert actions": [wandb.Image(asarray(marigold_actions_image), caption="Marigold actions"),
-                                  wandb.Image(asarray(rose_actions_image), caption="Rose actions")],
+               "Expert actions": [wandb.Image(asarray(expert_action_images[0]), caption="Marigold actions"),
+                                  wandb.Image(asarray(expert_action_images[1]), caption="Rose actions"),
+                                  wandb.Image(asarray(expert_action_images[2]), caption="Circle actions")
+                                  ],
                "Learners actions": [wandb.Image(asarray(img), caption="Learners actions") for img in images_actions],
                "Marigold Dist": wandb.plot.bar(marigold_dist_table, "label", "value", title="Marigold Distances"),
-               "Rose Dist": wandb.plot.bar(rose_dist_table, "label", "value", title="Rose Distances")})
+               "Rose Dist": wandb.plot.bar(rose_dist_table, "label", "value", title="Rose Distances"),
+               "Circle Dist": wandb.plot.bar(circle_dist_table, "label", "value", title="Circle Distances"),
+               })
 
 
-# #####
-    print("Running Quantitative Eval")
-    run_memo_quant(exp_name=logger_kwargs['exp_name'], experts=['marigold', 'rose'],
-                  contexts=list(range(10)), num_episodes=100, seed=7, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'))
-
+# ####
+#     print("Running Quantitative Eval")
+#     learner_rewards, learner_costs = run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=['marigold', 'rose'],
+#                                                    num_episodes=5, contexts=10, seed=0, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'),
+#                                                    eval_type="quantitative")
+#
+#     print("Learner rewards", learner_rewards)
+#     print("Learner costs", learner_costs)
+# ####
 
     wandb.finish()
-
 
 
 #

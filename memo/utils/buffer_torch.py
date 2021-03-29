@@ -1,4 +1,3 @@
-from itertools import chain
 import torch
 import numpy as np
 
@@ -13,7 +12,6 @@ class Trajectory:
         self.costs = []
         self.done = False
 
-
     def __len__(self):
         return len(self.observations)
 
@@ -23,6 +21,7 @@ class Buffer:
         self.trajectories = trajectories
 
     def sample(self, next=False):
+        # print("traj actions", self.trajectories[0].actions)
         observations_diff = torch.cat([torch.stack(trajectory.obs_diff) for trajectory in self.trajectories])
         observations = torch.cat([torch.stack(trajectory.observations) for trajectory in self.trajectories])
         actions = torch.cat([torch.stack(trajectory.actions) for trajectory in self.trajectories])
@@ -52,8 +51,13 @@ class MemoryBatch:
 
 
     def collate(self):
-        "Collates trajectories/episodes/memories from different experts"
+        '''
+        Collates trajectories/episodes/memories from different experts
+        :return:
+        '''
+
         for k in range(self.size):
+            print("collating memories of size: ", self.size)
             expert_states, expert_actions, _, expert_costs, expert_next_states, _ = self.memories[k].sample(next=True)
             print("Episode costs: ", torch.cumsum(expert_costs, dim=-1))
             print("Memory size: ", expert_states.shape)
@@ -75,19 +79,22 @@ class MemoryBatch:
 
             if self.transition_states is None:
                 self.transition_states, self.transition_actions = t_states, t_actions
-                self.expert_ids = torch.empty(self.transition_states.shape[0]).fill_(self.idx)
                 self.pure_expert_states = expert_states
+                # self.expert_ids = torch.empty(self.transition_states.shape[0]).fill_(self.idx)
+                self.expert_ids = torch.empty(t_states.shape[0]).fill_(self.idx)
 
             else:
                 self.transition_states = torch.cat([self.transition_states, t_states])
                 self.transition_actions = torch.cat([self.transition_actions, t_actions])
                 self.pure_expert_states = torch.cat([self.pure_expert_states, expert_states])
 
-                e_ids = torch.empty(self.transition_states.shape[0]).fill_(self.idx)
+                # e_ids = torch.empty(self.transition_states.shape[0]).fill_(self.idx)
+                e_ids = torch.empty(t_states.shape[0]).fill_(self.idx)
                 self.expert_ids = torch.cat([self.expert_ids, e_ids])
 
-
             self.idx += 1
+
+        # print("Final expert ids: ", self.expert_ids)
 
         return self.transition_states, self.pure_expert_states, self.transition_actions, self.expert_ids
 

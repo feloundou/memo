@@ -11,7 +11,7 @@ import os as osp
 from functools import wraps
 from inspect import getfullargspec, isfunction
 from itertools import starmap
-#
+
 import gym
 # import safety_gym
 import numpy as np
@@ -397,17 +397,12 @@ class Simulator:
     @autoassign(exclude=('env_name', 'env_args'))
     def __init__(self, env_name, policy, n_episodes, max_ep_len, obs_filter=None, **env_args):
         print("simulator init")
-
-        # self.env = np.asarray([make_env(env_name, **env_args) for i in range(n_trajectories)])
         self.env = np.asarray([gym.make(env_name) for i in range(n_episodes)])
-        # print("environment")
-        # print(self.env)
         self.n_trajectories = n_episodes
 
         for env in self.env:
             env._max_episode_steps = max_ep_len
 
-        # self.device = get_device()
 
 
 class ExpertSinglePathSimulator:
@@ -417,7 +412,7 @@ class ExpertSinglePathSimulator:
         Simulator.__init__(self, env_name, policy, n_trajectories, trajectory_len,
                            state_filter,  **env_args)
 
-    def run_sim(self, sampling_mode=True, render=False, seed=None):
+    def run_sim(self, sampling_mode=True, render=False, seed=None, mode="", demo_pi=[1,0]):
         print("policy eval launch")
         if seed is not None:
             init_seed = seed
@@ -429,7 +424,6 @@ class ExpertSinglePathSimulator:
             trajectories = np.asarray([Trajectory() for i in range(self.n_trajectories)])
             continue_mask = np.ones(self.n_trajectories)
             traj_count = 0
-
 
             for env, trajectory in zip(self.env, trajectories):
                 # initialize with fixed seed if necessary
@@ -454,20 +448,27 @@ class ExpertSinglePathSimulator:
                 policy_input = torch.stack([torch.tensor(trajectory.observations[-1])
                                             for trajectory in trajs_to_update])
 
-                action_dists = self.policy(policy_input)
+                if mode != "demo":
+                    action_dists = self.policy(policy_input)
 
-                if sampling_mode:
-                    actions = action_dists.sample()
-                    actions = actions.cpu()
+                    if sampling_mode:
+                        actions = action_dists.sample()
+                        actions = actions.cpu()
+                    else:
+                        actions = torch.Tensor(action_dists)
                 else:
-                    actions = torch.Tensor(action_dists)
+                    actions = torch.Tensor(demo_pi)
                 # print("actions sampled: ", actions)
 
 
                 for env, action, trajectory in zip(continuing_envs, actions, trajs_to_update):
+                    if mode == "demo":
+                        action = torch.as_tensor(demo_pi)
                     traj_count += 1
 
-                    obs, reward, trajectory.done, info = env.step(action.numpy())
+                    # obs, reward, trajectory.done, info = env.step(action.numpy())  # new change
+                    obs, reward, trajectory.done, info = env.step(action)
+                    # print("action taken: ", action)
 
                     obs = torch.tensor(obs).float()
                     reward = torch.tensor(reward, dtype=torch.float)

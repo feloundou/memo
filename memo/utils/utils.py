@@ -2,14 +2,19 @@ import json, joblib, subprocess, sys, os, shutil, warnings, math, wandb
 import numpy as np
 import pandas as pd
 from PIL import Image
+import torch.nn.functional as F
 from numpy import asarray
-from plotnine import ggplot, geom_path, geom_line, aes
+from plotnine import ggplot, geom_path, geom_line, aes, theme, element_rect, scale_color_cmap
 import torch
 import os.path as osp, time, atexit, os
 
 # import torch.nn.functional as F
 from mpi4py import MPI
 import traj_dist.distance as tdist
+
+from memo.algos.demo_policies import spinning_top_policy, circle_policy, square_policy, \
+    forward_policy, back_forth_policy, forward_spin_policy
+
 # from run_policy_sim_ppo import load_policy_and_env
 # from ppo_algos import *
 #
@@ -185,7 +190,7 @@ def allreduce(*args, **kwargs):
     return MPI.COMM_WORLD.Allreduce(*args, **kwargs)
 
 
-def load_policy_and_env(fpath, itr='last', deterministic=False, type='ppo'):
+def load_policy_and_env(fpath, itr='last', deterministic=False, type='ppo', demo_pi=[0,0]):
     """
     Load a policy from save along with RL env.
     Not exceptionally future-proof, but it will suffice for basic uses of the
@@ -211,7 +216,7 @@ def load_policy_and_env(fpath, itr='last', deterministic=False, type='ppo'):
         itr = '%d' % itr
 
     # load the get_action function
-    get_action = load_pytorch_policy(fpath, itr, deterministic, type=type)
+    get_action = load_pytorch_policy(fpath, itr, deterministic, type=type, demo_pi=demo_pi)
 
     # try to load environment from save
     # (sometimes this will fail because the environment could not be pickled)
@@ -226,7 +231,7 @@ def load_policy_and_env(fpath, itr='last', deterministic=False, type='ppo'):
     return env, get_action
 
 
-def load_pytorch_policy(fpath, itr, deterministic=False, type='ppo'):
+def load_pytorch_policy(fpath, itr, deterministic=False, type='ppo', demo_pi=[-1, 0]):
     """ Load a pytorch policy saved with Spinning Up Logger."""
 
     fname = osp.join(fpath, 'pyt_save', 'model' + itr + '.pt')
@@ -239,17 +244,18 @@ def load_pytorch_policy(fpath, itr, deterministic=False, type='ppo'):
         def get_action(x,c):
             with torch.no_grad():
                 x = torch.as_tensor(x, dtype=torch.float32)
-                # print("X is: ", x)
-                # print("Internal model is: ", model[0])
-                vaelor=model[0]
-                action = vaelor.act(x, c)
+                memo=model[0]
+                action = memo.act(x, c)
+            return action
+    elif type=='demo':
+        def get_action(x):
+            with torch.no_grad():
+                action = demo_pi
             return action
     else:
         def get_action(x):
             with torch.no_grad():
                 x = torch.as_tensor(x, dtype=torch.float32)
-                # print("X is: ", x)
-                # print("Internal model is: ", model)
                 action = model.act(x)
 
             return action
@@ -787,7 +793,7 @@ def run_memo_policies(env, get_action, context_label=0, max_ep_len=None,
             env.render()
             time.sleep(1e-3)
 
-        a = get_action(o, torch.as_tensor(context_label)) if mode == "student" else get_action(o)
+        a = get_action(o, F.one_hot(torch.as_tensor(context_label), 10)) if mode == "student" else get_action(o)
 
         actions.append(a)
         bot_pos.append(env.robot_pos[:2])
@@ -816,28 +822,50 @@ def run_memo_policies(env, get_action, context_label=0, max_ep_len=None,
             n += 1
 
 
-
     # return actions
     if eval_type == "quant":
         return cum_reward, cum_cost
     return actions, bot_pos, goal_pos
 
-def _path_plot_helper():
-    pass
 
-def run_memo_eval(exp_name, experts, contexts, seed, env_fn):
+
+# openai purple: 1C1B4B
+black = '#222222'
+gray = '#666666'
+red = '#FF3333'
+green = '#66CC00'
+blue = '#3333FF'
+purple = '#9933FF'
+orange = '#FF8000'
+yellow = '#FFFF33'
+white  = '#FFFFFF'
+
+def _path_plot_helper(dir, name, df):
+    plot = (ggplot(df) + aes(x="x", y="y") + geom_path(aes(colour='df.index'), size=1.5) + scale_color_cmap('spring') +
+            theme(rect=element_rect(color=white, fill="#1C1B4B")))
+    plot.save(osp.join(dir, name), dpi=100)
+    path_image = Image.open(osp.join(dir, name))
+    return path_image
+
+
+
+def run_memo_eval(exp_name, experts, num_episodes, contexts, seed, env_fn, eval_type="qualitative"):
+    expert_file_names = ['ppo_penalized_' + name + '_128x4' for name in experts]
+    pi_types = ['policy', 'policy', 'demo']
+    demo_pi = [None, None, circle_policy]
+
+    # Initialize trajectory collection
+    images_traj, images_actions, expert_path_images, expert_action_images, expert_policies = [], [], [], [], []
+
+    ExpertActions, ExpertPos, ExpertGoalPos = [[] for _ in range(len(experts))], [[] for _ in range(len(experts))], \
+                                              [[] for _ in range(len(experts))]
+
+    ExpertTrajDistances, ExpertTrajData = [[] for _ in range(len(experts))], [[] for _ in range(len(experts))]
+
     # Load experts
-
     _memo_path = osp.abspath(osp.dirname(osp.dirname(__file__)))
     _root_data_path = osp.join(_memo_path,  'data')
     _image_path = osp.join(_memo_path, 'images')
-    marigold_file_name = 'ppo_penalized_' + 'marigold' + '_128x4'
-    rose_file_name = 'ppo_penalized_' + 'rose' + '_128x4'
-
-    _, marigold_pi = load_policy_and_env(osp.join(_root_data_path, marigold_file_name, marigold_file_name + '_s0/'),
-                                       'last', False)
-    _, rose_pi = load_policy_and_env(osp.join(_root_data_path, rose_file_name, rose_file_name + '_s0/'),
-                                         'last', False)
 
     # Load learner
     memo_file_name = exp_name
@@ -846,158 +874,83 @@ def run_memo_eval(exp_name, experts, contexts, seed, env_fn):
 
     # Make environment
     env = env_fn()
-
-    # Set environment seed
-    config_seed = 0
-    torch.manual_seed(config_seed)
-    np.random.seed(config_seed)
-
-    # Initialize trajectory collection
-    images_traj, images_actions, marigold_traj_distances, rose_traj_distances = [], [], [], []
-    LearnerActions, LearnerPos, LearnerGoalPos = [[] for i in range(10)], [[] for i in range(10)], [[] for i in range(10)]
-
-    # Run expert episodes
-    print("Marigold Expert")
-    marigold_actions, marigold_pos, marigold_goal_pos = (run_memo_policies(env, marigold_pi, max_ep_len=1000,
-                                              num_episodes=1, mode="expert", render=False, env_seed=config_seed))
-    print("Rose Expert")
-    rose_actions, rose_pos, rose_goal_pos = (run_memo_policies(env, rose_pi, max_ep_len=1000,
-                                          num_episodes=1, mode="expert", render=False, env_seed=config_seed))
-
-    # Run Learner episodes
-    for k in contexts:
-        print("Learner: ", k)
-        LearnerActions[k], LearnerPos[k], LearnerGoalPos[k] = \
-        run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000,
-                          num_episodes=1, mode="student", render=False, env_seed=config_seed)
-
-    # Trajectory Plots
-    marigold_df_actions = pd.DataFrame(np.row_stack(marigold_actions), columns=["x", "y"])
-    rose_df_actions = pd.DataFrame(np.row_stack(rose_actions), columns=["x", "y"])
-
-    marigold_df_pos = pd.DataFrame(np.row_stack(marigold_pos), columns=["x", "y"])
-    rose_df_pos = pd.DataFrame(np.row_stack(rose_pos), columns=["x", "y"])
-
-    # np.array(data).astype('float64')
-    marigoldPlot_pos = (ggplot(marigold_df_pos) + aes(x="x", y="y") + geom_path(aes(colour='marigold_df_pos.index')))
-    marigoldPlot_pos.save(osp.join(_memo_path, "images/marigold_robot_path.png"), dpi=100)
-    rosePlot_pos = (ggplot(rose_df_pos) + aes(x="x", y="y") + geom_path(aes(colour='rose_df_pos.index')))
-    rosePlot_pos.save(osp.join(_memo_path , "images/rose_robot_path.png"), dpi=100)
-
-    marigoldPlot_actions = (ggplot(marigold_df_actions) + aes(x="x", y="y") + geom_path(aes(colour='marigold_df_pos.index')))
-    marigoldPlot_actions.save(osp.join(_memo_path, "images/marigold_robot_actions.png"), dpi=100)
-    rosePlot_actions = (ggplot(rose_df_actions) + aes(x="x", y="y") + geom_path(aes(colour='rose_df_pos.index')))
-    rosePlot_actions.save(osp.join(_memo_path , "images/rose_robot_actions.png"), dpi=100)
-
-    rose_path_image = Image.open(osp.join(_memo_path , "images/rose_robot_path.png"))
-    marigold_path_image = Image.open(osp.join(_memo_path , "images/marigold_robot_path.png"))
-    rose_actions_image = Image.open(osp.join(_memo_path , "images/rose_robot_actions.png"))
-    marigold_actions_image = Image.open(osp.join(_memo_path, "images/marigold_robot_actions.png"))
-
-    marigold_np, rose_np = np.row_stack(marigold_actions).astype('float64'), np.row_stack(rose_actions).astype('float64')
-
-    for k in range(10):
-        # Calculate distances
-        pos_data = [i.tolist() for i in LearnerPos[k]]
-        action_data = [i.tolist() for i in LearnerActions[k]]
-        learner_trajectory = np.array(pos_data).astype('float64')
-        learner_actions = np.array(action_data).astype('float64')
-
-        learner_dist_marigold = tdist.sspd(marigold_np, learner_actions)
-        learner_dist_rose = tdist.sspd(rose_np, learner_actions)
-        marigold_traj_distances.append(learner_dist_marigold)
-        rose_traj_distances.append(learner_dist_rose)
-
-        # Plot
-        movement_name = "learner_pos" + str(k)
-        action_name = "learner_act" + str(k)
-        learner_trajectory_df = pd.DataFrame(learner_trajectory, columns=["x", "y"])
-        learner_actions_df = pd.DataFrame(learner_actions, columns=["x", "y"])
-
-        TrajPlot = (ggplot(learner_trajectory_df) + aes(x="x", y="y") + geom_path(aes(colour='learner_trajectory_df.index')))
-        TrajPlot.save(_image_path + movement_name + '.png', dpi=100)
-        ActPlot = (ggplot(learner_actions_df) + aes(x="x", y="y") + geom_path(aes(colour='learner_actions_df.index')))
-        ActPlot.save(_image_path + action_name + '.png', dpi=100)
-
-        traj_image = Image.open(_image_path + movement_name + '.png')
-        images_traj.append(traj_image)
-        act_image = Image.open(_image_path + action_name + '.png')
-        images_actions.append(act_image)
-
-    traj_labels = [*['L' + str(i) for i in range(10)]]
-
-    marigold_traj_data = [[label, val] for (label, val) in zip(traj_labels, marigold_traj_distances)]
-    rose_traj_data = [[label, val] for (label, val) in zip(traj_labels, rose_traj_distances)]
-
-    marigold_action_data = [[label, val] for (label, val) in zip(traj_labels, marigold_traj_distances)]
-    rose_action_data = [[label, val] for (label, val) in zip(traj_labels, rose_traj_distances)]
-
-    return marigold_path_image, rose_path_image, marigold_actions_image, rose_actions_image,\
-           images_traj, images_actions, marigold_traj_data, rose_traj_data, marigold_action_data, rose_action_data
-
-
-
-def run_memo_quant(exp_name, experts, contexts, num_episodes, seed, env_fn):
-    # Make environment
-    env = env_fn()
-
-    # Load experts
-    _memo_path = osp.abspath(osp.dirname(osp.dirname(__file__)))
-    _root_data_path = osp.join(_memo_path,  'data')
-    _image_path = osp.join(_memo_path, 'images')
-    marigold_file_name = 'ppo_penalized_' + 'marigold' + '_128x4'
-    rose_file_name = 'ppo_penalized_' + 'rose' + '_128x4'
 
     # Set environment seed
     config_seed = seed
     torch.manual_seed(config_seed)
     np.random.seed(config_seed)
 
-    _, marigold_pi = load_policy_and_env(osp.join(_root_data_path, marigold_file_name, marigold_file_name + '_s0/'),
-                                       'last', False)
-    _, rose_pi = load_policy_and_env(osp.join(_root_data_path, rose_file_name, rose_file_name + '_s0/'),
-                                         'last', False)
-
     # Run expert episodes
-    print("Marigold Expert")
-    marigold_rewards, marigold_costs = run_memo_policies(env, marigold_pi, max_ep_len=1000,
-                                num_episodes=num_episodes, mode="expert", render=False,
-                                env_seed=config_seed, eval_type="quant")
+    for exp in range(len(experts)):
+        mode = pi_types[exp]
+        if mode == 'policy':
+            _, expert_pi = load_policy_and_env(
+                osp.join(_root_data_path, expert_file_names[exp], expert_file_names[exp] + '_s0/'),
+                'last', False)
+        else:
+            def circle_policy_func(o):
+                return circle_policy
+            expert_pi = circle_policy_func
 
-    marigoldPlot_ret = (ggplot(pd.DataFrame(marigold_rewards, columns=["y", "x"])) + aes(x="x", y="y") + geom_line())
-    marigoldPlot_ret.save(osp.join(_memo_path, "images/marigold_returns.png"), dpi=100)
+        ExpertActions[exp], ExpertPos[exp], ExpertGoalPos[exp] = \
+            (run_memo_policies(env, expert_pi, max_ep_len=1000,
+                               num_episodes=num_episodes, mode="expert", render=False, env_seed=config_seed))
 
-    marigoldPlot_costs = (ggplot(pd.DataFrame(marigold_costs, columns=["y", "x"])) + aes(x="x", y="y") + geom_line())
-    marigoldPlot_costs.save(osp.join(_memo_path, "images/marigold_costs.png"), dpi=100)
+        exp_path_image = _path_plot_helper(dir=_image_path, name=experts[exp] + '_robot_path.png',
+                                           df=pd.DataFrame(np.row_stack(ExpertPos[exp]), columns=["x", "y"]))
+        exp_actions_image = _path_plot_helper(dir=_image_path, name=experts[exp] +'_robot_actions.png',
+                                              df=pd.DataFrame(np.row_stack(ExpertActions[exp]), columns=["x", "y"]))
 
-    print("Rose Expert")
-    rose_rewards, rose_costs = run_memo_policies(env, rose_pi, max_ep_len=1000,
-                               num_episodes=num_episodes, mode="expert", render=False,
-                               env_seed=config_seed, eval_type="quant")
+        expert_path_images.append(exp_path_image)
+        expert_action_images.append(exp_actions_image)
+        expert_policies.append(expert_pi)
 
-    rosePlot_rewards = (ggplot(pd.DataFrame(rose_rewards, columns=["y", "x"])) + aes(x="x", y="y") + geom_line())
-    rosePlot_rewards.save(osp.join(_memo_path, "images/rose_rewards.png"), dpi=100)
+    traj_labels = [*['L' + str(i) for i in range(10)]]
 
-    rosePlot_costs = (ggplot(pd.DataFrame(rose_costs, columns=["y", "x"])) + aes(x="x", y="y") + geom_line())
-    rosePlot_costs.save(osp.join(_memo_path, "images/rose_costs.png"), dpi=100)
+    if eval_type == "quantitative":
+        LearnerRewards, LearnerCosts, = [[] for i in range(10)], [[] for i in range(10)]
 
-    # Load learner
-    memo_file_name = exp_name
-    _, memo_pi = load_policy_and_env(osp.join(_root_data_path, memo_file_name, memo_file_name + '_s0/'),
-                                     'last', False, type='memo')
+        # Run Learner episodes
+        for k in range(contexts):
+            print("Learner: ", k)
+            LearnerRewards[k], LearnerCosts[k] = \
+                run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000,
+                                  num_episodes=num_episodes, mode="student",
+                                  render=False, env_seed=config_seed, eval_type="quant")
 
-    LearnerRewards, LearnerCosts, = [[] for i in range(10)], [[] for i in range(10)]
+        return LearnerRewards, LearnerCosts
 
-    # Run Learner episodes
-    for k in contexts:
-        print("Learner: ", k)
-        LearnerRewards[k], LearnerCosts[k] = \
-            run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000,
-                              num_episodes=num_episodes, mode="student",
-                              render=False, env_seed=config_seed, eval_type="quant")
+    else:
+        # Run Learner episodes
+        for k in range(contexts):
+            LearnerActions, LearnerPos, LearnerGoalPos = \
+                run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000,
+                                  num_episodes=num_episodes, mode="student", render=False, env_seed=config_seed)
+
+            # Calculate distances
+            pos_data = [i.tolist() for i in LearnerPos]
+            action_data = [i.tolist() for i in LearnerActions]
+
+            learner_trajectory, learner_actions = np.array(pos_data).astype('float64'), np.array(action_data).astype('float64')
+
+            # Calculate SSPD distances from actions (might change this to actual paths later)
+            for i in range(len(experts)):
+                ExpertTrajDistances[i].append(tdist.sspd(np.row_stack(ExpertActions[i]).astype('float64'), learner_actions))
+                ExpertTrajData[i] = [[label, val] for (label, val) in zip(traj_labels, ExpertTrajDistances[i])]
+
+            # Plot
+            learner_trajectory_df = pd.DataFrame(learner_trajectory, columns=["x", "y"])
+            learner_actions_df = pd.DataFrame(learner_actions, columns=["x", "y"])
+
+            traj_image = _path_plot_helper(dir=_image_path, name="learner_pos" + str(k) + '.png', df=learner_trajectory_df)
+            act_image = _path_plot_helper(dir=_image_path, name="learner_act" + str(k) + '.png', df=learner_actions_df)
+
+            images_traj.append(traj_image)
+            images_actions.append(act_image)
+
+        return expert_path_images, expert_action_images, images_traj, images_actions, ExpertTrajData
 
 
-#
 # class Samples:
 #     def __init__(self, states=None, actions=None, rewards=None,
 #                  next_states=None, weights=None, indexes=None):
@@ -1325,8 +1278,6 @@ class CostPOBuffer:
         self.gamma, self.lam = gamma, lam
         self.cost_gamma, self.cost_lam = cost_gamma, cost_lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
-
-
 
 
     def store(self, obs, act, rew, val, cost, cval, logp, pi_info):
