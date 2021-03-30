@@ -139,6 +139,7 @@ class Expert(Agent):
                  ac_kwargs=dict(),
                  seed=0,
                  penalty_init=5e-3,
+                 extension='_128x4',
                  ):
 
         self.config_name = config_name
@@ -160,7 +161,8 @@ class Expert(Agent):
         self._expert_path = osp.join(self._memo_dir, 'expert_data/')
         self._clone_path = osp.join(self._memo_dir, 'clone_data/')
         self._demo_dir = osp.join(self._expert_path, self.config_name + '_episodes/')
-        self.file_name = self.config_name + '_128x4'
+        self.extension = extension
+        self.file_name = self.config_name + self.extension
 
         # Special function to avoid certain slowdowns from PyTorch + MPI combo.
         setup_pytorch_for_mpi()

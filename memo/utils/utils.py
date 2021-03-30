@@ -805,7 +805,7 @@ def run_memo_policies(env, get_action, context_label=0, latent_modes=None, max_e
             cum_cost[n] = [ep_cost, n]
 
             print('Episode %d \t EpRet %.3f \t EpCost %.3f \t EpLen %d' % (n, ep_ret, ep_cost, ep_len))
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+            o, r, d, ep_ret, ep_cost, ep_len = env.reset(), 0, False, 0, 0, 0
             n += 1
 
     # return actions

@@ -28,16 +28,16 @@ train_batch_size_config=20
 env = gym.make(ENV_NAME)
 
 # 1. Make Experts
-marigold_expert = Expert(config_name='marigold',
+marigold_expert = Expert(config_name='marigold', extension='_128x4',
                 record_samples=True, actor_critic=MLPActorCritic,
-                ac_kwargs=dict(hidden_sizes=[128] * 4), seed=0) #444
+                ac_kwargs=dict(hidden_sizes=[128] * 4), seed=0, ) #444
 
 # Seed here helps reset initialization for episodes for the perfect set of trajectories
-rose_expert = Expert(config_name='rose',
+rose_expert = Expert(config_name='rose', extension='_128x4',
                 record_samples=True,  actor_critic=MLPActorCritic,
                 ac_kwargs=dict(hidden_sizes=[128] * 4), seed=123)   # 123
 
-circle_expert = Expert(config_name='circle',
+circle_expert = Expert(config_name='circle', extension='',
                 record_samples=True,  actor_critic=MLPActorCritic,
                 ac_kwargs=dict(hidden_sizes=[128] * 4), seed=123)   # 123
 
