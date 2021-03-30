@@ -3,6 +3,7 @@ from gym.spaces import Box, Discrete
 import numpy as np
 import torch
 from torch import nn
+import IPython
 # from torch.nn import Parameter
 import torch.nn.functional as F
 from torch.distributions import Independent, OneHotCategorical, Categorical
@@ -147,9 +148,8 @@ class MEMOActor(nn.Module):
 class MEMO(nn.Module):
     """Multiple Experts, Multiple Objectives;
     """
-    def __init__(self, obs_dim, latent_dim, out_dim, encoder_hidden, decoder_hidden):
+    def __init__(self, obs_dim, out_dim, encoder_hidden, decoder_hidden, latent_modes):
         '''
-
         :param obs_dim:
         :param latent_dim:
         :param out_dim:
@@ -158,8 +158,9 @@ class MEMO(nn.Module):
         '''
         super(MEMO, self).__init__()
         self.found_contexts = []
+        self.latent_modes = latent_modes
 
-        self.num_embeddings = 10
+        self.num_embeddings = self.latent_modes
         self.embedding_dim = obs_dim
         self.vq_encoder = VQEncoder(obs_dim, self.embedding_dim)  # original
 
@@ -168,8 +169,7 @@ class MEMO(nn.Module):
         self.postnet = nn.Linear(self.embedding_dim, encoder_hidden[-1])
         self.vq_decoder = VQDecoder(encoder_hidden[-1], obs_dim)
 
-        # self.decoder = MEMOActor(state_dim=obs_dim+1, action_dim=out_dim)
-        self.decoder = MEMOActor(state_dim=obs_dim + 10, hidden_size=decoder_hidden, action_dim=out_dim)
+        self.action_decoder = MEMOActor(state_dim=obs_dim + self.latent_modes, hidden_size=decoder_hidden, action_dim=out_dim)
         self.action_vq_dist = None
 
 
@@ -199,18 +199,17 @@ class MEMO(nn.Module):
         # print("Reconstruction: ", reconstruction)
 
         categorical_proposal_reshape = torch.reshape(categorical_proposal, (-1, 1))
-        categorical_proposal_onehot = F.one_hot(categorical_proposal_reshape, 10).squeeze().float()
+        categorical_proposal_onehot = F.one_hot(categorical_proposal_reshape, self.latent_modes).squeeze().float()
 
         concat_state_vq = torch.cat([state, categorical_proposal_onehot], dim=-1)
-        action_vq_dist = self.decoder(concat_state_vq)
-        # print("Action Distribution: ", action_vq_dist)
-        ####
+        # IPython.embed()
+        action_vq_dist = self.action_decoder(concat_state_vq)
         return encoder_output, quantized, reconstruction, categorical_proposal, action_vq_dist
 
 
     def act(self, state, context_label):
         concat_state_vq = torch.cat([state, torch.reshape(torch.as_tensor(context_label), (-1,))], dim=-1)
-        action_vq_dist = self.decoder(concat_state_vq)
+        action_vq_dist = self.action_decoder(concat_state_vq)
         action = action_vq_dist.sample()
         return action
 
@@ -291,31 +290,26 @@ class VectorQuantizer(nn.Module):
         super().__init__()
 
         self.num_embeddings = num_embeddings  # E_N
-        print("num embed: ", self.num_embeddings)
         self.embedding_dim = embedding_dim    # E_D
-        print("embed dim: ", self.embedding_dim)
         self.embeddings = nn.Embedding(num_embeddings, embedding_dim)
 
-        self.scale = 1. / self.num_embeddings  # scalar
+        self.scale = 1. / self.num_embeddings  # decimal
         print("Quantizer Scale: ", self.scale)
         nn.init.uniform_(self.embeddings.weight, -self.scale, self.scale)
 
     def proposal_distribution(self, input):
         input_shape = input.shape  # [B, OBS_DIM]
         flatten_input = input.flatten(end_dim=-2).contiguous()  # [B, OBS_DIM]
+        distances = (flatten_input ** 2).sum(dim=1, keepdim=True) # [B, 1]
+        distances = distances + (self.embeddings.weight ** 2).sum(dim=1) # [B, E_N]
+        distances -= 2 * flatten_input @ self.embeddings.weight.t()  # [B, E_N]
+        categorical_posterior = torch.argmin(distances, dim=-1) # [B]
 
-        distances = (flatten_input ** 2).sum(dim=1, keepdim=True)
-        distances = distances + (self.embeddings.weight ** 2).sum(dim=1)
-        distances -= 2 * flatten_input @ self.embeddings.weight.t()
-        print("distances 3", distances)
-
-        categorical_posterior = torch.argmin(distances, dim=-1, keepdim=True).view(input_shape[:-1])
         return categorical_posterior
 
     def forward(self, input):
-        proposal = self.proposal_distribution(input)
-        quantized = self.embeddings(proposal).contiguous()
-
+        proposal = self.proposal_distribution(input) # [B]
+        quantized = self.embeddings(proposal).contiguous() # [B, OBS_DIM]
         return quantized, proposal
 
 
@@ -333,7 +327,6 @@ class VQCriterion(nn.Module):
         flatten_encoder_output = encoder_output.flatten(end_dim=-2)
 
         reconstruction_loss = F.mse_loss(input, reconstruction)
-
         vq_loss = F.mse_loss(flatten_encoder_output.detach(), flatten_quantized)
         commitment_loss = F.mse_loss(flatten_encoder_output, flatten_quantized.detach())
 

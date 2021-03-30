@@ -160,7 +160,7 @@ class Expert(Agent):
         self._expert_path = osp.join(self._memo_dir, 'expert_data/')
         self._clone_path = osp.join(self._memo_dir, 'clone_data/')
         self._demo_dir = osp.join(self._expert_path, self.config_name + '_episodes/')
-        self.file_name = 'ppo_penalized_' + self.config_name + '_128x4'
+        self.file_name = self.config_name + '_128x4'
 
         # Special function to avoid certain slowdowns from PyTorch + MPI combo.
         setup_pytorch_for_mpi()
@@ -218,7 +218,6 @@ class Expert(Agent):
         for epoch in range(epochs):
             for t in range(self.local_steps_per_epoch):
                 a, v, vc, logp = self.ac.step(torch.as_tensor(o, dtype=torch.float32))
-
 
                 # env.step => Take action
                 next_o, r, d, info = env.step(a)
@@ -334,12 +333,9 @@ class Expert(Agent):
                 wandb.finish()
 
 
-    def run_expert_sim(self, env, get_from_file, max_cost=None, min_reward=None, episode_split=[1,1], expert_episodes=1000, replay_buffer_size=10000,
+    def run_expert_sim(self, env, get_from_file, episode_split=[1,1], expert_episodes=1000, replay_buffer_size=10000,
                        mode="trained", demo_pi=circle_policy, seeds=[0]):
         """Episode split [number of episodes per iteration, number of iterations]"""
-        obs_dim = env.observation_space.shape
-        act_dim = env.action_space.shape
-
         print("Now adding trajectories to memory")
 
         # n_trajectories = expert_episodes
@@ -350,7 +346,7 @@ class Expert(Agent):
             print(colorize("Pulling saved expert %s trajectories from file over %d episodes" %
                            (self.config_name, expert_episodes), 'blue', bold=True))
 
-            m_file = osp.join(self._expert_path , self.config_name + '_episodes/memory_data_' + str(
+            m_file = osp.join(self._expert_path, self.config_name + '_episodes/memory_data_' + str(
                 int(expert_episodes)) + '_buffer.pkl')
 
             file_m = open(m_file, 'rb')

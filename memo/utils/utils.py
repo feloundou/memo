@@ -3,8 +3,12 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import torch.nn.functional as F
+import IPython
 from numpy import asarray
-from plotnine import ggplot, geom_path, geom_line, aes, theme, element_rect, scale_color_cmap
+from cpprb import ReplayBuffer
+from plotnine import ggplot, geom_path, geom_line, geom_point, \
+    aes, theme, element_rect, scale_color_cmap, element_text, \
+    element_line, element_blank, labs, scale_color_identity, scale_fill_manual, scale_color_manual
 import torch
 import os.path as osp, time, atexit, os
 
@@ -20,6 +24,8 @@ from memo.algos.demo_policies import spinning_top_policy, circle_policy, square_
 #
 # from memo.models.neural_nets import *
 # from torch import nn
+import gym
+import wandb.plot as wplot
 import scipy
 
 
@@ -28,17 +34,7 @@ import scipy
 #
 #
 #
-# # Default neural network backend for each algo
-# # (Must be either 'tf1' or 'pytorch')
-# DEFAULT_BACKEND = {
-#     'vpg': 'pytorch',
-#     'trpo': 'tf1',
-#     'ppo': 'pytorch',
-#     'ddpg': 'pytorch',
-#     'td3': 'pytorch',
-#     'sac': 'pytorch'
-# }
-#
+
 # Where experiment outputs are saved by default:
 DEFAULT_DATA_DIR = osp.join(osp.abspath(osp.dirname(osp.dirname(__file__))),'data')
 
@@ -169,11 +165,6 @@ def mpi_fork(n, bind_to_core=False):
         if bind_to_core:
             args += ["-bind-to", "core"]
         args += [sys.executable] + sys.argv
-        print("mpi args: ", args)
-        print("sys args types partial", sys.argv)
-        # print("sys args types full", sys.argv[0])
-        print("testing paths: ", os.path.abspath(sys.argv[0]))
-        # print("env: ", env)
         subprocess.check_call(args, env=env)
         sys.exit()
 
@@ -262,9 +253,7 @@ def load_pytorch_policy(fpath, itr, deterministic=False, type='ppo', demo_pi=[-1
 
     # make function for producing an action given a single state
 
-    # # investigate accuracy of normal distributions
-
-
+    # investigate accuracy of normal distributions
     return get_action
 
 
@@ -761,39 +750,43 @@ class EpochLogger(Logger):
         vals = np.concatenate(v) if isinstance(v[0], np.ndarray) and len(v[0].shape) > 0 else v
         return mpi_statistics_scalar(vals)
 
-
 DIV_LINE_WIDTH = 80
-#
-#
+
 # def raw_numpy(raw):
 #     # return raw: np.array and done: np.array
 #     _mask = torch.ones(len(raw), dtype=torch.bool) # Tyna change this mask eventually
 #     done= ~_mask
 #     return raw, done
-#
 
 def count_vars(module):
     return sum(p.numel() for p in module.parameters() if p.requires_grad)
 
-
-def run_memo_policies(env, get_action, context_label=0, max_ep_len=None,
+def run_memo_policies(env, get_action, context_label=0, latent_modes=None, max_ep_len=None,
                       num_episodes=1, mode="student", render=True, env_seed=0, eval_type="qual"):
     assert env is not None, \
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
         "and we can't run the agent in it. :( \n\n Check out the readthedocs " + \
         "page on Experiment Outputs for how to handle this situation."
 
+    assert latent_modes is not None, \
+        "Latent modes not found! It looks like you have not specified the latent modes." \
+        "As a hint, it is the number of candidate latent spaces your model worked with."
+
     actions, bot_pos, goal_pos = [], [], []
+    first_goal, first_hazards = [], []
 
     env._seed = env_seed
     o, r, d, ep_ret, ep_cost, ep_len, n = env.reset(), 0, False, 0, 0, 0, 0
     cum_reward, cum_cost = [[] for i in range(num_episodes)], [[] for i in range(num_episodes)]
+    first_goal.append(env.goal_pos)
+    first_hazards.append(env.hazards_pos)
+
     while n < num_episodes:
         if render:
             env.render()
             time.sleep(1e-3)
 
-        a = get_action(o, F.one_hot(torch.as_tensor(context_label), 10)) if mode == "student" else get_action(o)
+        a = get_action(o, F.one_hot(torch.as_tensor(context_label), latent_modes)) if mode == "student" else get_action(o)
 
         actions.append(a)
         bot_pos.append(env.robot_pos[:2])
@@ -818,9 +811,7 @@ def run_memo_policies(env, get_action, context_label=0, max_ep_len=None,
     # return actions
     if eval_type == "quantitative":
         return cum_reward, cum_cost
-    return actions, bot_pos, goal_pos
-
-
+    return actions, bot_pos, goal_pos, first_goal, first_hazards
 
 # openai purple: 1C1B4B
 black = '#222222'
@@ -833,33 +824,66 @@ orange = '#FF8000'
 yellow = '#FFFF33'
 white  = '#FFFFFF'
 
-def _path_plot_helper(dir, name, df):
-    plot = (ggplot(df) + aes(x="x", y="y") + geom_path(aes(colour='df.index'), size=1.5) + scale_color_cmap('spring') +
-            theme(rect=element_rect(color=white, fill="#1C1B4B")))
+def _path_plot_helper(dir, name, df, goals=None, hazards=None):
+    # IPython.embed()
+    plot = (ggplot(data=df) + aes(x="x", y="y") + geom_path(aes(colour='df.index'), size=1.5) +
+            scale_color_cmap('spring') + labs(x="X", y="Y") +
+            geom_point(data=pd.DataFrame(np.row_stack(goals), columns=["x", "y"]),
+                       mapping=aes(x="x", y="y"), fill='cyan', alpha=0.5, size=15, show_legend=False)+
+            geom_point(data=pd.DataFrame(np.row_stack(hazards), columns=["x", "y", "z"]),
+                       mapping=aes(x="x", y="y"), fill='red', alpha=0.5, size=10, show_legend=False) +
+            theme(rect=element_rect(color=white,  fill="#1C1B4B"),  text=element_text(color=white, weight='bold'),
+                  legend_position='top', legend_direction='horizontal',
+    legend_key_width=30, legend_key_height=20, legend_title=element_blank()))
+
     plot.save(osp.join(dir, name), dpi=100)
     path_image = Image.open(osp.join(dir, name))
+    # IPython.embed()
     return path_image
-
 
 def _line_plot_helper(dir, name, df):
-    plot = (ggplot(df) + aes(x="x", y="y") + geom_line(size=1.5) + scale_color_cmap('spring') +
+    plot = (ggplot(df) + aes(x="y", y="x") + geom_line(color='yellow',size=1.5) +
             theme(rect=element_rect(color=white, fill="#1C1B4B")))
     plot.save(osp.join(dir, name), dpi=100)
     path_image = Image.open(osp.join(dir, name))
     return path_image
 
+def _metric_plot_helper(dir, file_name, names, data):
+    color_values = ["yellow", "cyan", "orange", "white", "pink",
+                    "black", "blue", "purple", "green", "brown"]
+    i = 0
+    df = pd.DataFrame(np.row_stack(data[i]), columns=["value", "episode"])
+    df["expert_name"] = names[i]
+    for _ in range(len(names)-1):
+        i += 1
+        df_temp = pd.DataFrame(np.row_stack(data[i]), columns=["value", "episode"])
+        df_temp["expert_name"] = names[i]
+        df = df.append(df_temp)
+
+    plot = (ggplot(df) + aes('episode', 'value', color='expert_name', group='expert_name')
+                 + scale_color_manual(values=color_values)
+                 + geom_line(size=2) +
+                    theme(rect=element_rect(color=white, fill="#1C1B4B"), text=element_text(color=white, weight='bold'),
+                          legend_position='top', legend_direction='horizontal',
+                          legend_key_width=30, legend_key_height=20, legend_title=element_blank()))
+
+    plot.save(osp.join(dir, file_name), dir=100)
+    metric_image = Image.open(osp.join(dir, file_name))
+    return metric_image
 
 
-def run_memo_eval(exp_name, experts, num_episodes, contexts, seed, env_fn, eval_type="qualitative"):
-    expert_file_names = ['ppo_penalized_' + name + '_128x4' for name in experts]
+
+
+def run_memo_eval(exp_name, experts, latent_modes, num_episodes, seed, env_fn, eval_type="qualitative"):
+    expert_file_names = [name + '_128x4' for name in experts]
     pi_types = ['policy', 'policy', 'demo']
-    demo_pi = [None, None, circle_policy]
 
     # Initialize trajectory collection
     images_traj, images_actions, expert_path_images, expert_action_images, expert_policies = [], [], [], [], []
 
     ExpertActions, ExpertPos, ExpertGoalPos = [[] for _ in range(len(experts))], [[] for _ in range(len(experts))], \
                                               [[] for _ in range(len(experts))]
+    FirstGoalPos , FirstHazardsPos = [[] for _ in range(len(experts))], [[] for _ in range(len(experts))]
 
     ExpertTrajDistances, ExpertTrajData = [[] for _ in range(len(experts))], [[] for _ in range(len(experts))]
 
@@ -872,7 +896,6 @@ def run_memo_eval(exp_name, experts, num_episodes, contexts, seed, env_fn, eval_
     memo_file_name = exp_name
     _, memo_pi = load_policy_and_env(osp.join(_root_data_path, memo_file_name, memo_file_name + '_s0/'),
                                      'last', False, type='memo')
-
     # Make environment
     env = env_fn()
 
@@ -881,38 +904,56 @@ def run_memo_eval(exp_name, experts, num_episodes, contexts, seed, env_fn, eval_
     torch.manual_seed(config_seed)
     np.random.seed(config_seed)
 
-    # Run expert episodes
-    for exp in range(len(experts)):
-        mode = pi_types[exp]
-        if mode == 'policy':
-            _, expert_pi = load_policy_and_env(
-                osp.join(_root_data_path, expert_file_names[exp], expert_file_names[exp] + '_s0/'),
-                'last', False)
-        else:
-            def circle_policy_func(o):
-                return circle_policy
-            expert_pi = circle_policy_func
-
-        ExpertActions[exp], ExpertPos[exp], ExpertGoalPos[exp] = \
-            (run_memo_policies(env, expert_pi, max_ep_len=1000,
-                               num_episodes=num_episodes, mode="expert", render=False, env_seed=config_seed))
-
-        exp_path_image = _path_plot_helper(dir=_image_path, name=experts[exp] + '_robot_path.png',
-                                           df=pd.DataFrame(np.row_stack(ExpertPos[exp]), columns=["x", "y"]))
-        exp_actions_image = _path_plot_helper(dir=_image_path, name=experts[exp] +'_robot_actions.png',
-                                              df=pd.DataFrame(np.row_stack(ExpertActions[exp]), columns=["x", "y"]))
-
-        expert_path_images.append(exp_path_image)
-        expert_action_images.append(exp_actions_image)
-        expert_policies.append(expert_pi)
-
-    traj_labels = [*['L' + str(i) for i in range(10)]]
+    traj_labels = [*['L' + str(i) for i in range(latent_modes)]]
 
     if eval_type == "quantitative":
-        ExpertRewards, ExpertCosts, = [[] for i in range(len(experts))], [[] for i in range(len(experts))]
-        LearnerRewards, LearnerCosts, = [[] for i in range(10)], [[] for i in range(10)]
+        ExpertRewards, ExpertCosts, = [[] for _ in range(len(experts))], [[] for _ in range(len(experts))]
+        LearnerRewards, LearnerCosts, = [[] for _ in range(latent_modes)], [[] for _ in range(latent_modes)]
 
         # Run Expert episodes
+        for exp in range(len(experts)):
+            type = pi_types[exp]
+            if type == 'policy':
+                _, expert_pi = load_policy_and_env(
+                    osp.join(_root_data_path, expert_file_names[exp], expert_file_names[exp] + '_s0/'),
+                    'last', False)
+            else:
+                def circle_policy_func(o):
+                    return circle_policy
+
+                expert_pi = circle_policy_func
+
+            print("loop quant exp no", exp)
+            print("expert names: ", experts)
+
+            ExpertRewards[exp], ExpertCosts[exp] = \
+                (run_memo_policies(env, expert_pi, max_ep_len=1000, latent_modes=latent_modes,
+                                   num_episodes=num_episodes, mode="expert",
+                                   render=False, env_seed=config_seed, eval_type=eval_type))
+
+        exp_costs_image = _metric_plot_helper(dir=_image_path, names=experts, file_name="expert_costs.png", data=ExpertCosts)
+        exp_rewards_image = _metric_plot_helper(dir=_image_path, names=experts, file_name= "expert_rewards.png", data=ExpertRewards)
+
+        # Run Learner episodes
+        for k in range(latent_modes):
+            print("Learner: ", k)
+            LearnerRewards[k], LearnerCosts[k] = \
+                run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000, latent_modes=latent_modes,
+                                  num_episodes=num_episodes, mode="student",
+                                  render=False, env_seed=config_seed, eval_type=eval_type)
+
+        learner_names = ["L" + str(x) for x in range(latent_modes)]
+
+        learner_costs_image = _metric_plot_helper(dir=_image_path, names=learner_names, file_name="learner_costs.png",
+                                              data=LearnerCosts)
+        learner_rewards_image = _metric_plot_helper(dir=_image_path, names=learner_names, file_name="learner_rewards.png",
+                                                data=LearnerRewards)
+
+        # return ExpertRewards, ExpertCosts, LearnerRewards, LearnerCosts
+        return exp_rewards_image, exp_costs_image, learner_rewards_image, learner_costs_image
+
+    else:
+        # Run expert episodes
         for exp in range(len(experts)):
             mode = pi_types[exp]
             if mode == 'policy':
@@ -925,26 +966,27 @@ def run_memo_eval(exp_name, experts, num_episodes, contexts, seed, env_fn, eval_
 
                 expert_pi = circle_policy_func
 
-            ExpertRewards[exp], ExpertCosts[exp] = \
-                (run_memo_policies(env, expert_pi, max_ep_len=1000,
-                                   num_episodes=num_episodes, mode="expert",
-                                   render=False, env_seed=config_seed, eval_type=eval_type))
+            ExpertActions[exp], ExpertPos[exp], ExpertGoalPos[exp], FirstGoalPos[exp], FirstHazardsPos[exp] = \
+                (run_memo_policies(env, expert_pi, max_ep_len=1000, latent_modes=latent_modes,
+                                   num_episodes=num_episodes, mode="expert", render=False, env_seed=config_seed))
+
+            exp_path_image = _path_plot_helper(dir=_image_path, name=experts[exp] + '_robot_path.png', df=pd.DataFrame(np.row_stack(ExpertPos[exp]), columns=["x", "y"],),
+                                               goals=ExpertGoalPos[exp],
+                                               hazards=FirstHazardsPos[exp],
+                                               )
+            exp_actions_image = _path_plot_helper(dir=_image_path, name=experts[exp] + '_robot_actions.png', df=pd.DataFrame(np.row_stack(ExpertActions[exp]), columns=["x", "y"]),
+                                                  goals=ExpertGoalPos[exp],
+                                                  hazards=FirstHazardsPos[exp],
+                                                  )
+
+            expert_path_images.append(exp_path_image)
+            expert_action_images.append(exp_actions_image)
+            expert_policies.append(expert_pi)
 
         # Run Learner episodes
-        for k in range(contexts):
-            print("Learner: ", k)
-            LearnerRewards[k], LearnerCosts[k] = \
-                run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000,
-                                  num_episodes=num_episodes, mode="student",
-                                  render=False, env_seed=config_seed, eval_type=eval_type)
-
-        return ExpertRewards, ExpertCosts, LearnerRewards, LearnerCosts
-
-    else:
-        # Run Learner episodes
-        for k in range(contexts):
-            LearnerActions, LearnerPos, LearnerGoalPos = \
-                run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000,
+        for k in range(latent_modes):
+            LearnerActions, LearnerPos, LearnerGoalPos, FirstGoalPos, FirstHazardsPos = \
+                run_memo_policies(env, memo_pi, context_label=k, max_ep_len=1000, latent_modes=latent_modes,
                                   num_episodes=num_episodes, mode="student", render=False, env_seed=config_seed)
 
             # Calculate distances
@@ -962,13 +1004,92 @@ def run_memo_eval(exp_name, experts, num_episodes, contexts, seed, env_fn, eval_
             learner_trajectory_df = pd.DataFrame(learner_trajectory, columns=["x", "y"])
             learner_actions_df = pd.DataFrame(learner_actions, columns=["x", "y"])
 
-            traj_image = _path_plot_helper(dir=_image_path, name="learner_pos" + str(k) + '.png', df=learner_trajectory_df)
-            act_image = _path_plot_helper(dir=_image_path, name="learner_act" + str(k) + '.png', df=learner_actions_df)
+            traj_image = _path_plot_helper(dir=_image_path, name="learner_pos" + str(k) + '.png', df=learner_trajectory_df, goals=LearnerGoalPos,
+                                                  hazards=FirstHazardsPos)
+            act_image = _path_plot_helper(dir=_image_path, name="learner_act" + str(k) + '.png', df=learner_actions_df, goals=LearnerGoalPos,
+                                                  hazards=FirstHazardsPos)
 
             images_traj.append(traj_image)
             images_actions.append(act_image)
 
         return expert_path_images, expert_action_images, images_traj, images_actions, ExpertTrajData
+
+
+
+def memo_full_eval(model, expert_names, collated_memories, latent_modes, eval_modes, episodes_per_epoch, N_expert, eval_batch_size, seed, memo_kwargs, logger_kwargs):
+    '''
+    :param model:
+    :param collated_memories:
+    :param eval_modes: ['class', 'policy', 'quantitative']
+    :param episodes_per_epoch:
+    :param N_expert:
+    :param eval_batch_size:
+    :param seed:
+    :param memo_kwargs:
+    :param logger_kwargs:
+    :return:
+    '''
+    # evaluation mode check
+    allowed_modes = ['class', 'policy', 'quantitative']
+    for m in eval_modes:
+        assert m in allowed_modes, "Invalid mode found. Accepted evaluation modes are: " \
+                                   "['class', 'policy', 'quantitative']"
+
+    if "class" in eval_modes:
+        print("Running Classification Evaluation")
+        model.eval()
+
+        # Randomize and fetch an evaluation sample
+        eval_raw_states_batch, eval_delta_states_batch, eval_actions_batch, eval_sampled_experts = \
+            collated_memories.eval_batch(N_expert, eval_batch_size, episodes_per_epoch)
+
+        # Pass through MEMO
+        loss, recon_loss, _, predicted_expert_labels, _ = model(eval_raw_states_batch,
+                                                               eval_delta_states_batch,
+                                                               eval_actions_batch)
+
+        ground_truth, predictions = eval_sampled_experts, predicted_expert_labels
+
+        print("ground truth", np.array(ground_truth))
+        print("predictions ", np.array(predictions))
+
+        # Confusion matrix
+        class_names = [str(x) for x in range(latent_modes)]
+        wandb.log({"confusion_mat": wplot.confusion_matrix(
+            y_true=np.array(ground_truth), preds=np.array(predictions), class_names=class_names)})
+
+    if 'policy' in eval_modes:
+        print("Running Policy Evaluation")
+
+        # unroll and plot a full episode
+        expert_path_images, expert_action_images, images_traj, images_actions, expert_traj_data = \
+            run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=expert_names, latent_modes=latent_modes,
+                          num_episodes=1, seed=seed, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'))
+
+        wandb.log({"Expert paths": [wandb.Image(asarray(expert_path_images[expert_names.index(name)]), caption=name + " path") for name in expert_names],
+                   "Learners paths": [wandb.Image(asarray(img), caption="Learners path") for img in images_traj],
+                   "Expert actions": [wandb.Image(asarray(expert_action_images[expert_names.index(name)]), caption=name + " path") for name in expert_names],
+                   "Learners actions": [wandb.Image(asarray(img), caption="Learners actions") for img in images_actions],
+                   })
+
+        for i in range(len(expert_names)):
+            wandb.log({"Dist " + str(i): wandb.plot.bar(wandb.Table(data=expert_traj_data[i], columns=["label", "value"]), "label", "value", title=expert_names[i] + " distances")})
+
+    if 'quantitative' in eval_modes:
+        print("Running Quantitative Eval")
+        expert_reward_images, expert_cost_images, learner_reward_images, learner_cost_images = \
+            run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=expert_names,
+                          num_episodes=5, latent_modes=latent_modes,
+                          seed=0, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'),
+                          eval_type="quantitative")
+
+        wandb.log({"Performance Metrics": [wandb.Image(asarray(expert_reward_images), caption= "Expert rewards"),
+                   wandb.Image(asarray(expert_cost_images), caption="Expert costs"),
+                   wandb.Image(asarray(learner_reward_images), caption="Learner rewards"),
+                   wandb.Image(asarray(learner_cost_images), caption="Learner costs")]})
+
+
+
 
 
 # class Samples:
@@ -1159,115 +1280,7 @@ def setup_logger_kwargs(exp_name, seed=None, data_dir=None, datestamp=False):
 #     return str_v
 #
 #
-# class PPOBuffer:
-#     """
-#     A buffer for storing trajectories experienced by a PPO agent interacting with the environment,
-#     and using Generalized Advantage Estimation (GAE-Lambda) for calculating the advantages of state-action pairs.
-#
-#     Generalized Advantage Estimation: Forks the different runs across cores, message passes
-#     using mpi_fork, calculates the average of advantage, then descends.
-#     """
-#
-#     def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95, cost_gamma=0.99, cost_lam=0.95):
-#         self.obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
-#         self.act_buf = np.zeros(combined_shape(size, act_dim), dtype=np.float32)
-#         self.adv_buf = np.zeros(size, dtype=np.float32)
-#         self.rew_buf = np.zeros(size, dtype=np.float32)
-#         self.ret_buf = np.zeros(size, dtype=np.float32)
-#         self.val_buf = np.zeros(size, dtype=np.float32)
-#         self.logp_buf = np.zeros(size, dtype=np.float32)
-#
-#         self.cadv_buf = np.zeros(size, dtype=np.float32)    # cost advantage
-#         self.cost_buf = np.zeros(size, dtype=np.float32)    # costs
-#         self.cret_buf = np.zeros(size, dtype=np.float32)    # cost return
-#         self.cval_buf = np.zeros(size, dtype=np.float32)    # cost value
-#
-#         self.gamma, self.lam = gamma, lam
-#         self.cost_gamma, self.cost_lam = cost_gamma, cost_lam
-#         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
-#
-#     # def store(self, obs, act, rew, val, cost, cval, logp, done, next_obs):
-#     def store(self, obs, act, rew, val, cost, cval, logp, next_obs):
-#         """
-#         Append one timestep of agent-environment interaction to the buffer.
-#         """
-#         assert self.ptr < self.max_size  # buffer has to have room so you can store
-#         self.obs_buf[self.ptr] = obs
-#         self.act_buf[self.ptr] = act
-#         self.rew_buf[self.ptr] = rew
-#         self.val_buf[self.ptr] = val
-#
-#         self.cost_buf[self.ptr] = cost
-#         self.cval_buf[self.ptr] = cval
-#         self.logp_buf[self.ptr] = logp
-#
-#         # self.rb.add(obs=obs, act=act, rew=rew, next_obs=next_obs, done=done)
-#         # self.rb.add(obs=obs, act=act, rew=rew, next_obs=next_obs)
-#
-#         self.ptr += 1
-#
-#     def finish_path(self, last_val=0, last_cval=0):
-#         """
-#         Call this at the end of a trajectory, or when one gets cut off
-#         by an epoch ending. This looks back in the buffer to where the
-#         trajectory started, and uses rewards and value estimates from
-#         the whole trajectory to compute advantage estimates with GAE-Lambda,
-#         as well as compute the rewards-to-go for each state, to use as
-#         the targets for the value function.
-#         The "last_val" argument should be 0 if the trajectory ended
-#         because the agent reached a terminal state (died), and otherwise
-#         should be V(s_T), the value function estimated for the last state.
-#         This allows us to bootstrap the reward-to-go calculation to account
-#         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
-#         :param last_cval:
-#         """
-#         path_slice = slice(self.path_start_idx, self.ptr)
-#         # print("Path slice")
-#         # print(path_slice)
-#         rews = np.append(self.rew_buf[path_slice], last_val)
-#         vals = np.append(self.val_buf[path_slice], last_val)
-#         costs = np.append(self.cost_buf[path_slice], last_cval)
-#         cvals = np.append(self.cval_buf[path_slice], last_cval)
-#
-#         # implement GAE-Lambda advantage calculation
-#         deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-#
-#         # print("Advantage buffer")
-#         self.adv_buf[path_slice] = discount_cumsum(deltas, self.gamma * self.lam)
-#         # print(self.adv_buf)
-#         # computes rewards-to-go, to be targets for the value function
-#         self.ret_buf[path_slice] = discount_cumsum(rews, self.gamma)[:-1]
-#
-#         # implement GAE-Lambda advantage for costs
-#         cdeltas = costs[:-1] + self.gamma * cvals[1:] - cvals[:-1]
-#         self.cadv_buf[path_slice] = discount_cumsum(cdeltas, self.cost_gamma * self.cost_lam)
-#         # computes rewards-to-go
-#         self.cret_buf[path_slice] = discount_cumsum(costs, self.cost_gamma)[:-1]
-#         self.path_start_idx = self.ptr
-#
-#     def get(self):
-#         """
-#         Call this at the end of an epoch to get all of the data from
-#         the buffer, with advantages appropriately normalized (shifted to have
-#         mean zero and std one). Also, resets some pointers in the buffer.
-#         """
-#         assert self.ptr == self.max_size  # buffer has to be full before you can get
-#         self.ptr, self.path_start_idx = 0, 0
-#         # the next four lines implement the advantage normalization trick, for rewards and costs
-#         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
-#         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-#
-#         cadv_mean, _ = mpi_statistics_scalar(self.cadv_buf)
-#         # Center, but do NOT rescale advantages for cost gradient # Tyna Note
-#         self.cadv_buf -= cadv_mean
-#
-#         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-#                     adv=self.adv_buf, logp=self.logp_buf, cadv=self.cadv_buf,
-#                     cret=self.cret_buf)
-#
-#         return {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
-#
-#
+
 class CostPOBuffer:
 
     def __init__(self,
@@ -1533,337 +1546,7 @@ class CostPOBuffer:
 #
 #
 #
-#
-#
-# class Buffer(object):
-#     def __init__(self, obs_dim, act_dim, batch_size, ep_len):
-#         self.max_batch = batch_size
-#         self.max_volume = batch_size * ep_len
-#         self.obs_dim = obs_dim
-#
-#         self.obs = np.zeros((self.max_volume, obs_dim))
-#         self.act = np.zeros((self.max_volume, act_dim))
-#         self.rew = np.zeros(self.max_volume)
-#         self.end = np.zeros(batch_size + 1) # The first term will always be 0 / boundries of trajectories
-#
-#         self.ptr = 0
-#         self.eps = 0
-#
-#     def store(self, obs, act, rew, sdr, val, lgp):
-#         raise NotImplementedError
-#
-#     def end_episode(self, last_val=0):
-#         raise NotImplementedError
-#
-#     def retrieve_all(self):
-#         raise NotImplementedError
-#
-# # Buffer for training an expert
-# class BufferActor(Buffer):
-#     def __init__(self, obs_dim, act_dim, batch_size, ep_len, gamma=0.99, lam=0.95):
-#         super(BufferActor, self).__init__(obs_dim, act_dim, batch_size, ep_len)
-#
-#         self.ret = np.zeros(self.max_volume)
-#         self.val = np.zeros(self.max_volume)
-#         self.adv = np.zeros(self.max_volume)
-#         self.lgp = np.zeros(self.max_volume) # Log prob of selected actions, used for entropy estimation
-#
-#         self.gamma = gamma
-#         self.lam = lam
-#
-#     def store(self, obs, act, rew, val, lgp):
-#         assert self.ptr < self.max_volume
-#         self.obs[self.ptr] = obs
-#         self.act[self.ptr] = act
-#         self.rew[self.ptr] = rew
-#         self.val[self.ptr] = val
-#         self.lgp[self.ptr] = lgp
-#         self.ptr += 1
-#
-#     def finish_path(self, last_val=0):
-#         ep_slice = slice(int(self.end[self.eps]), self.ptr)
-#         rewards = np.append(self.rew[ep_slice], last_val)
-#         values = np.append(self.val[ep_slice], last_val)
-#
-#         deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
-#
-#         returns = scipy.signal.lfilter([1], [1, float(-self.gamma)], rewards[::-1], axis=0)[::-1]
-#         self.ret[ep_slice] = returns[:-1]
-#         self.adv[ep_slice] = scipy.signal.lfilter([1], [1, float(-self.gamma * self.lam)], deltas[::-1], axis=0)[::-1]
-#
-#         self.eps += 1
-#         self.end[self.eps] = self.ptr
-#
-#     # def finish_path(self, last_val=0):
-#     #     path_slice = slice(self.path_start_idx, self.ptr)
-#     #     rews = np.append(self.rew_buf[path_slice], last_val)
-#     #     vals = np.append(self.val_buf[path_slice], last_val)
-#     #     deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-#     #     self.adv_buf[path_slice] = discount_cumsum(deltas, self.gamma * self.lam)
-#     #     self.ret_buf[path_slice] = discount_cumsum(rews, self.gamma)[:-1]
-#     #
-#     #     self.path_start_idx = self.ptr
-#
-#     def retrieve_all(self):
-#         assert self.eps == self.max_batch
-#         occup_slice = slice(0, self.ptr)
-#         self.ptr = 0
-#         self.eps = 0
-#
-#         adv_mean, adv_std = mpi_statistics_scalar(self.adv[occup_slice])
-#         self.adv[occup_slice] = (self.adv[occup_slice] - adv_mean) / adv_std
-#         return [self.obs[occup_slice], self.act[occup_slice], self.adv[occup_slice],
-#             self.ret[occup_slice], self.lgp[occup_slice]]
-#
-# class BufferStudent(Buffer):
-#     def __init__(self, obs_dim, act_dim, batch_size, ep_len, gamma=0.99, lam=0.95):
-#         super(BufferStudent, self).__init__(obs_dim, act_dim, batch_size, ep_len)
-#
-#         self.sdr = np.zeros(self.max_volume) # Pseudo reward, the log prob
-#         self.ret = np.zeros(self.max_volume) # Discounted return based on self.sdr
-#         self.val = np.zeros(self.max_volume)
-#         self.adv = np.zeros(self.max_volume)
-#         self.lgp = np.zeros(self.max_volume) # Log prob of selected actions, used for entropy estimation
-#
-#         self.gamma = gamma
-#         self.lam = lam
-#
-#     def store(self, obs, act, rew, sdr, val, lgp):
-#         assert self.ptr < self.max_volume
-#         self.obs[self.ptr] = obs
-#         self.act[self.ptr] = act
-#         self.rew[self.ptr] = rew
-#         self.sdr[self.ptr] = sdr
-#         self.val[self.ptr] = val
-#         self.lgp[self.ptr] = lgp
-#         self.ptr += 1
-#
-#     def end_episode(self, last_val=0):
-#         ep_slice = slice(int(self.end[self.eps]), self.ptr)
-#         rewards = np.append(self.sdr[ep_slice], last_val)
-#         values = np.append(self.val[ep_slice], last_val)
-#
-#         deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
-#
-#         returns = scipy.signal.lfilter([1], [1, float(-self.gamma)], rewards[::-1], axis=0)[::-1]
-#         self.ret[ep_slice] = returns[:-1]
-#         self.adv[ep_slice] = scipy.signal.lfilter([1], [1, float(-self.gamma * self.lam)], deltas[::-1], axis=0)[::-1]
-#
-#         self.eps += 1
-#         self.end[self.eps] = self.ptr
-#
-#     def retrieve_all(self):
-#         assert self.eps == self.max_batch
-#         occup_slice = slice(0, self.ptr)
-#         self.ptr = 0
-#         self.eps = 0
-#
-#         adv_mean, adv_std = mpi_statistics_scalar(self.adv[occup_slice])
-#         self.adv[occup_slice] = (self.adv[occup_slice] - adv_mean) / adv_std
-#         return [self.obs[occup_slice], self.act[occup_slice], self.adv[occup_slice],
-#             self.ret[occup_slice], self.lgp[occup_slice]]
-#
-# class BufferTeacher(Buffer):
-#     def __init__(self, obs_dim, act_dim, batch_size, ep_len, gamma=0.99, lam=0.95):
-#         super(BufferTeacher, self).__init__(obs_dim, act_dim, batch_size, ep_len)
-#
-#     def store(self, obs, act, rew):
-#         assert self.ptr < self.max_volume
-#         self.obs[self.ptr] = obs
-#         self.act[self.ptr] = act
-#         self.rew[self.ptr] = rew
-#
-#         self.ptr += 1
-#
-#     def end_episode(self, last_val=0):
-#         self.eps += 1
-#         self.end[self.eps] = self.ptr
-#
-#     def retrieve_all(self):
-#         assert self.eps == self.max_batch
-#         occup_slice = slice(0, self.ptr)
-#         self.ptr = 0
-#         self.eps = 0
-#
-#         return [self.obs[occup_slice], self.act[occup_slice]]
-#
-#
-#
-# class VALORBuffer(object):
-#     def __init__(self, con_dim, obs_dim, act_dim, batch_size, ep_len, dc_interv, gamma=0.99, lam=0.95, N=11):
-#         self.max_batch = batch_size
-#         self.dc_interv = dc_interv
-#         self.max_s = batch_size * ep_len
-#         self.obs_dim = obs_dim
-#         self.obs = np.zeros((self.max_s, obs_dim + con_dim))
-#         self.act = np.zeros((self.max_s, act_dim))
-#         self.rew = np.zeros(self.max_s)
-#         self.cost = np.zeros(self.max_s)
-#         self.ret = np.zeros(self.max_s)
-#         self.adv = np.zeros(self.max_s)
-#         self.pos = np.zeros(self.max_s)
-#         self.lgt = np.zeros(self.max_s)
-#         self.val = np.zeros(self.max_s)
-#         self.end = np.zeros(batch_size + 1) # The first will always be 0
-#         self.ptr = 0
-#         self.eps = 0
-#         self.dc_eps = 0
-#
-#         self.N = 8
-#
-#         self.con = np.zeros(self.max_batch * self.dc_interv)
-#         self.dcbuf = np.zeros((self.max_batch * self.dc_interv, self.N-1, obs_dim))
-#
-#         self.gamma = gamma
-#         self.lam = lam
-#
-#     def store(self, con, obs, act, rew, cost, val, lgt):
-#         assert self.ptr < self.max_s
-#         self.obs[self.ptr] = obs
-#         self.act[self.ptr] = act
-#         self.con[self.eps] = con
-#         self.rew[self.ptr] = rew
-#         self.cost[self.ptr] = cost
-#         self.val[self.ptr] = val
-#         self.lgt[self.ptr] = lgt
-#         self.ptr += 1
-#
-#     def calc_diff(self):   # make life easier and calculate the difference before passing to buffer
-#         # Store differences into a specific memory
-#         # TODO: convert this into vector operation
-#         start = int(self.end[self.eps])
-#         ep_l = self.ptr - start - 1
-#         for i in range(self.N-1):
-#         # for i in range(1000):
-#
-#             prev = int(i*ep_l/(self.N-1))
-#             succ = int((i+1)*ep_l/(self.N-1))
-#
-#             self.dcbuf[self.eps, i] = self.obs[start + succ][:self.obs_dim] - self.obs[start + prev][:self.obs_dim]
-#
-#         return self.dcbuf[self.eps]
-#
-#     def finish_path(self, pret_pos, last_val=0):
-#         # pret_pos gives the log possibility of cheating the discriminator
-#         ep_slice = slice(int(self.end[self.eps]), self.ptr)
-#         rewards = np.append(self.rew[ep_slice], last_val)
-#         values = np.append(self.val[ep_slice], last_val)
-#         deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
-#
-#         returns = scipy.signal.lfilter([1], [1, float(-self.gamma)], rewards[::-1], axis=0)[::-1]
-#         self.ret[ep_slice] = returns[:-1]
-#         self.adv[ep_slice] = scipy.signal.lfilter([1], [1, float(-self.gamma * self.lam)], deltas[::-1], axis=0)[::-1]
-#         self.pos[ep_slice] = pret_pos
-#
-#         self.eps += 1
-#         self.dc_eps += 1
-#         self.end[self.eps] = self.ptr
-#
-#     def retrieve_all(self):
-#         assert self.eps == self.max_batch
-#         occup_slice = slice(0, self.ptr)
-#         self.ptr = 0
-#         self.eps = 0
-#         adv_mean, adv_std = mpi_statistics_scalar(self.adv[occup_slice])
-#         pos_mean, pos_std = mpi_statistics_scalar(self.pos[occup_slice])
-#         self.adv[occup_slice] = (self.adv[occup_slice] - adv_mean) / adv_std
-#         self.pos[occup_slice] = (self.pos[occup_slice] - pos_mean) / pos_std
-#         return [self.obs[occup_slice], self.act[occup_slice], self.adv[occup_slice], self.pos[occup_slice],
-#             self.ret[occup_slice], self.cost[occup_slice], self.lgt[occup_slice]]
-#
-#     def retrieve_dc_buff(self):
-#         assert self.dc_eps == self.max_batch * self.dc_interv
-#         self.dc_eps = 0
-#         return [self.con, self.dcbuf]
-#
-#
-#
-#
-# class PureVALORBuffer(object):
-#     def __init__(self, con_dim, obs_dim, act_dim, batch_size, ep_len, dc_interv, gamma=0.99, lam=0.95, N=11):
-#         self.max_batch = batch_size
-#         self.dc_interv = dc_interv
-#         self.max_s = batch_size * ep_len
-#         self.obs_dim = obs_dim
-#         self.obs = np.zeros((self.max_s, obs_dim + con_dim))
-#         # self.simple_obs = np.zeros((self.max_s, obs_dim))
-#         self.act = np.zeros((self.max_s, act_dim))
-#         self.rew = np.zeros(self.max_s)
-#         # self.cost = np.zeros(self.max_s)
-#         # self.ret = np.zeros(self.max_s)
-#         # self.adv = np.zeros(self.max_s)
-#         self.pos = np.zeros(self.max_s)
-#         self.lgt = np.zeros(self.max_s)
-#         self.val = np.zeros(self.max_s)
-#         self.end = np.zeros(batch_size + 1) # The first will always be 0
-#         self.ptr = 0
-#         self.eps = 0
-#         self.dc_eps = 0
-#
-#         self.N = N
-#
-#         self.con = np.zeros(self.max_batch * self.dc_interv)
-#         self.dcbuf = np.zeros((self.max_batch * self.dc_interv, self.N-1, obs_dim))
-#
-#         self.gamma = gamma
-#         self.lam = lam
-#
-#     def store(self, con, obs, act, rew):
-#
-#         assert self.ptr < self.max_s
-#         self.obs[self.ptr] = obs
-#         # self.simple_obs[self.ptr] = simple_obs
-#
-#         self.act[self.ptr] = act
-#         self.con[self.eps] = con
-#         self.rew[self.ptr] = rew
-#
-#         self.ptr += 1
-#
-#     def calc_diff(self):   # make life easier and calculate the difference before passing to buffer
-#         # Store differences into a specific memory
-#         # TODO: convert this into vector operation
-#         start = int(self.end[self.eps])
-#         ep_l = self.ptr - start - 1
-#
-#         for i in range(self.N-1):
-#             prev = int(i*ep_l/(self.N-1))
-#             succ = int((i+1)*ep_l/(self.N-1))
-#
-#             self.dcbuf[self.eps, i] = self.obs[start + succ][:self.obs_dim] - self.obs[start + prev][:self.obs_dim]
-#
-#         return self.dcbuf[self.eps]
-#
-#     def finish_path(self, pret_pos, last_val=0):
-#         # pret_pos gives the log possibility of cheating the discriminator
-#         ep_slice = slice(int(self.end[self.eps]), self.ptr)
-#         # rewards = np.append(self.rew[ep_slice], last_val)
-#         # values = np.append(self.val[ep_slice], last_val)
-#
-#         self.pos[ep_slice] = pret_pos
-#
-#         self.eps += 1
-#         self.dc_eps += 1
-#         self.end[self.eps] = self.ptr
-#
-#     def retrieve_all(self):
-#         # print("eps", self.eps)
-#         # print("max batch", self.max_batch)
-#         assert self.eps == self.max_batch
-#         occup_slice = slice(0, self.ptr)
-#         self.ptr = 0
-#         self.eps = 0
-#
-#         return [self.obs[occup_slice], self.act[occup_slice], self.rew[occup_slice]
-#                 ]
-#
-#     def retrieve_dc_buff(self):
-#
-#         assert self.dc_eps == self.max_batch * self.dc_interv
-#         self.dc_eps = 0
-#         return [self.con, self.dcbuf]
-#
-#
+
 def frange_cycle_linear(n_iter, start=0.0, stop=1.0, n_cycle=4, ratio=0.5):
     # Source: https://github.com/haofuml/cyclical_annealing. Explore other (non-linear) types
     L = np.ones(n_iter) * stop
