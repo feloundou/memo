@@ -30,7 +30,7 @@ env = gym.make(ENV_NAME)
 # 1. Make Experts
 marigold_expert = Expert(config_name='marigold', extension='_128x4',
                 record_samples=True, actor_critic=MLPActorCritic,
-                ac_kwargs=dict(hidden_sizes=[128] * 4), seed=0, ) #444
+                ac_kwargs=dict(hidden_sizes=[128] * 4), seed=0) #444
 
 # Seed here helps reset initialization for episodes for the perfect set of trajectories
 rose_expert = Expert(config_name='rose', extension='_128x4',
@@ -72,7 +72,6 @@ else:
                                  episode_split=[10, 10],
                                  expert_episodes=100, mode="demo", demo_pi=circle_policy,
                                  seeds=[0, 444, 123, 999, 85, 4444, 64, 128, 808, 838])
-    circle_memory = circle_expert.memory
     print("Replay Buffers Created")
 
 
@@ -107,12 +106,15 @@ memo, c_memories = memo_valor(lambda: gym.make(ENV_NAME),
 # the number of experts is greater than or less than number of modes?
 
 # 4. Evaluate
-memo_full_eval(model=memo, expert_names=['marigold', 'rose', 'circle'], collated_memories=c_memories, latent_modes=latent_modes_config,
+memo_full_eval(model=memo, expert_names=['marigold', 'rose', 'circle'],
+               file_names=[marigold_expert.file_name, rose_expert.file_name, circle_expert.file_name],
+               pi_types=['policy', 'policy', 'demo'],
+               collated_memories=c_memories, latent_modes=latent_modes_config,
                eval_modes=['class', 'policy', 'quantitative'],
                episodes_per_epoch=episodes_per_epoch_config,
                N_expert=episodes_per_epoch_config*ep_len_config,
                eval_batch_size=eval_batch_size_config, seed=seed_config,
-               memo_kwargs=memo_kwargs_config, logger_kwargs=logger_kwargs)
+               logger_kwargs=logger_kwargs)
 
 # Some tips to train MEMO:
 # 1. # Warmup improves performance

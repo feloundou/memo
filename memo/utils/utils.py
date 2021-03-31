@@ -874,9 +874,10 @@ def _metric_plot_helper(dir, file_name, names, data):
 
 
 
-def run_memo_eval(exp_name, experts, latent_modes, num_episodes, seed, env_fn, eval_type="qualitative"):
-    expert_file_names = [name + '_128x4' for name in experts]
-    pi_types = ['policy', 'policy', 'demo']
+def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
+                  latent_modes, num_episodes, seed, env_fn, eval_type="qualitative"):
+    # expert_file_names = [name + '_128x4' for name in experts]
+    # pi_types = ['policy', 'policy', 'demo']
 
     # Initialize trajectory collection
     images_traj, images_actions, expert_path_images, expert_action_images, expert_policies = [], [], [], [], []
@@ -1016,7 +1017,9 @@ def run_memo_eval(exp_name, experts, latent_modes, num_episodes, seed, env_fn, e
 
 
 
-def memo_full_eval(model, expert_names, collated_memories, latent_modes, eval_modes, episodes_per_epoch, N_expert, eval_batch_size, seed, memo_kwargs, logger_kwargs):
+def memo_full_eval(model, expert_names, file_names, pi_types, collated_memories, latent_modes,
+                   eval_modes, episodes_per_epoch, N_expert, eval_batch_size,
+                   seed, logger_kwargs):
     '''
     :param model:
     :param collated_memories:
@@ -1063,7 +1066,8 @@ def memo_full_eval(model, expert_names, collated_memories, latent_modes, eval_mo
 
         # unroll and plot a full episode
         expert_path_images, expert_action_images, images_traj, images_actions, expert_traj_data = \
-            run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=expert_names, latent_modes=latent_modes,
+            run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=expert_names, expert_file_names=file_names,
+                         pi_types=pi_types, latent_modes=latent_modes,
                           num_episodes=1, seed=seed, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'))
 
         wandb.log({"Expert paths": [wandb.Image(asarray(expert_path_images[expert_names.index(name)]), caption=name + " path") for name in expert_names],
@@ -1078,7 +1082,8 @@ def memo_full_eval(model, expert_names, collated_memories, latent_modes, eval_mo
     if 'quantitative' in eval_modes:
         print("Running Quantitative Eval")
         expert_reward_images, expert_cost_images, learner_reward_images, learner_cost_images = \
-            run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=expert_names,
+            run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=expert_names, expert_file_names=file_names,
+                          pi_types=pi_types,
                           num_episodes=5, latent_modes=latent_modes,
                           seed=0, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'),
                           eval_type="quantitative")
