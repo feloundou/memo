@@ -4,7 +4,6 @@ import torch
 import wandb
 import gym
 import safety_gym
-from adabelief_pytorch import AdaBelief
 
 import numpy as np
 from torch.optim import Adam
@@ -14,7 +13,8 @@ from memo.models.neural_nets import MEMO
 from memo.utils.buffer_torch import MemoryBatch
 from memo.utils.utils import proc_id, num_procs, EpochLogger, \
     setup_pytorch_for_mpi, sync_params, mpi_avg_grads, count_vars, \
-    frange_cycle_sigmoid, NoamOpt
+    frange_cycle_sigmoid
+
 
 ####################################################3
 
@@ -83,9 +83,9 @@ def memo_valor(env_fn,
     logger.log('\nNumber of parameters: \t d: %d\n' % var_counts)
 
     # Optimizers
-    memo_optimizer = AdaBelief(memo.parameters(), lr=memo_lr, eps=1e-20, rectify=True)
-    # memo_optimizer = AdaBelief(memo.parameters(), lr=memo_lr, eps=1e-16, rectify=True)
-    # memo_optimizer = Adam(memo.parameters(), lr=memo_lr, betas=(0.9, 0.98), eps=1e-9)
+    memo_optimizer = Adam(memo.parameters(), lr=memo_lr)
+    # scheduler = StepLR(memo_optimizer, step_size=2, gamma=0.96)
+    scheduler = ReduceLROnPlateau(memo_optimizer, mode='max', factor=0.5, patience=5, verbose=True)
 
     start_time = time.time()
 
@@ -107,15 +107,15 @@ def memo_valor(env_fn,
         raw_states_batch, delta_states_batch, actions_batch, sampled_experts = \
            pure_states[batch_indexes], transition_states[batch_indexes], transition_actions[batch_indexes], expert_ids[batch_indexes]
 
-        # print("Expert IDs: ", sampled_experts)
-        recon_gamma = epoch < warmup
-        # set log p old before training
-        # memo.logp_old = torch.as_tensor(0.)
+        print("Expert IDs: ", sampled_experts)
+        recon_gamma = 1e-8 if epoch < warmup else 1    # underweight recognition early on
+        # recon_gamma = 1    # no warmup
 
         # for i in range(train_iters):
         for i in range(local_iter_per_epoch):
             # kl_beta = kl_beta_schedule[epoch]
             kl_beta = 1
+
             # only take context labeling into account for first label
             loss, recon_loss, X, latent_labels, vq_loss = memo(raw_states_batch, delta_states_batch,  actions_batch,
                                                                      kl_beta, recon_gamma)
@@ -124,12 +124,12 @@ def memo_valor(env_fn,
             mpi_avg_grads(memo)
             memo_optimizer.step()
 
-        # scheduler.step(loss.mean().data.item())
-
         total_l_new, recon_l_new, vq_l_new = loss.mean().data.item(), recon_loss.mean().data.item(), vq_loss.mean().data.item()
 
         memo_metrics = {'MEMO Loss': total_l_new, 'Recon Loss': recon_l_new, "VQ Labeling Loss": vq_l_new,
-                        "KL Beta": kl_beta_schedule[epoch]}
+                        "KL Beta": kl_beta_schedule[epoch],
+                        # "LearningRate": lr[0]
+                        }
         wandb.log(memo_metrics)
 
         logger.store(TotalLoss=total_l_new, PolicyLoss=recon_l_new, # ContextLoss=context_l_new,

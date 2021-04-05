@@ -144,7 +144,6 @@ def ppo(env_fn,
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
 
     penalty = np.log(max(np.exp(penalty_init)-1, 1e-8))
-
     mov_avg_ret, mov_avg_cost = 0, 0
 
 
@@ -260,9 +259,7 @@ def ppo(env_fn,
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
-
         for t in range(local_steps_per_epoch):
-
             a, v, vc, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
             # print("action taken: ", a)

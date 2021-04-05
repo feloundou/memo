@@ -44,6 +44,8 @@ memo/expert_data/
 memo/algos/videos/
 memo/algos/recording/
 memo/images/
+memo/data/
+memo/models/wandb/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

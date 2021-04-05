@@ -348,8 +348,12 @@ class Expert(Agent):
             print(colorize("Pulling saved expert %s trajectories from file over %d episodes" %
                            (self.config_name, expert_episodes), 'blue', bold=True))
 
+            mpath = osp.join(self._expert_path, self.config_name + '_episodes/')
+
             m_file = osp.join(self._expert_path, self.config_name + '_episodes/memory_data_' + str(
                 int(expert_episodes)) + '_buffer.pkl')
+
+            os.makedirs(mpath, exist_ok=True)
 
             file_m = open(m_file, 'rb')
             memory = pickle.load(file_m)
@@ -388,6 +392,8 @@ class Expert(Agent):
                 AggTraj = traj if AggTraj is None else np.append(AggTraj, traj)
 
             BigMemory = Buffer(AggTraj)
+            mpath = osp.join(self._expert_path , self.config_name + '_episodes/')
+            os.makedirs(mpath, exist_ok=True)
             bufname_pk = self._expert_path + self.config_name + '_episodes/memory_data_' + str(int(n_trajectories*n_iter)) + '_buffer.pkl'
             file_pi = open(bufname_pk, 'wb')
             pickle.dump(BigMemory, file_pi)

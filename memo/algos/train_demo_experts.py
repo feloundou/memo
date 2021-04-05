@@ -180,22 +180,19 @@ def ppo(env_fn,
     for epoch in range(epochs):
         step = 0
 
-
         for t in range(local_steps_per_epoch):
             # a, v, vc, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
             a, v, vc, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
-
-
             # print("action taken: ", a)
             # env.step => Take action
-            # next_o, r, d, info = env.step(a)
-            if epoch % 2:
-                a = demo_pi[step]
-                next_o, _, d, info = env.step(a)
-                r = 0.5
-            else:
-                next_o, _, d, info = env.step(a)
-                r = -0.5
+            next_o, r, d, info = env.step(a)
+            # if epoch % 2:
+            #     a = demo_pi[step]
+            #     next_o, _, d, info = env.step(a)
+            #     r = 0.5
+            # else:
+            #     next_o, _, d, info = env.step(a)
+            #     r = -0.5
 
             # Include penalty on cost
             c = info.get('cost', 0)
@@ -292,13 +289,13 @@ def main(config):
     parser.add_argument('--cost_gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     # parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--cpu', type=int, default=2)
+    parser.add_argument('--cpu', type=int, default=1)
     parser.add_argument('--steps', type=int, default=8000)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--cost_lim', type=float, default=25)
     parser.add_argument('--config_name', type=str, default='standard')
     parser.add_argument('--penalty_lr', type=float, default=0.005)
-    parser.add_argument('--exp_name', type=str, default='ppo_safe')
+    parser.add_argument('--exp_name', type=str, default='greedy-ppo')
 
     args = parser.parse_args()
 
@@ -307,14 +304,13 @@ def main(config):
     # demo_pi = square_policy
     # logger_kwargs = setup_logger_kwargs("square_policy", args.seed)
     demo_pi = back_forth_policy
-    logger_kwargs = setup_logger_kwargs("back_forth_policy", args.seed)
+    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
 
     # Run experiment
     ppo(lambda: gym.make(args.env),
         actor_critic=MLPActorCritic,
         demo_pi=demo_pi,
-        # agent=PPOAgent(),
         ac_kwargs=dict(hidden_sizes=[config['hid']] * config['l']),
         gamma=config['gamma'],
         lam=config['lam'],
@@ -333,7 +329,3 @@ if __name__ == '__main__':
                        hid=128, l=8)
     main(demo_config)
 
-    # exec(open('../config/nn_config.py').read())
-
-    # main(peony_config)
-    # main(amaranth_config)

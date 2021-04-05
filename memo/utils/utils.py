@@ -786,7 +786,12 @@ def run_memo_policies(env, get_action, context_label=0, latent_modes=None, max_e
             env.render()
             time.sleep(1e-3)
 
-        a = get_action(o, F.one_hot(torch.as_tensor(context_label), latent_modes)) if mode == "student" else get_action(o)
+        context_one_hot = F.one_hot(torch.as_tensor(context_label), latent_modes)
+        context_zero_hot = torch.tensor(1.) - context_one_hot
+
+        # a = get_action(o, F.one_hot(torch.as_tensor(context_label), latent_modes)) if mode == "student" else get_action(o)
+        a = get_action(o, context_zero_hot) if mode == "student" else get_action(o)
+        # a = get_action(o, context_one_hot) if mode == "student" else get_action(o)
 
         actions.append(a)
         bot_pos.append(env.robot_pos[:2])
@@ -876,8 +881,6 @@ def _metric_plot_helper(dir, file_name, names, data):
 
 def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
                   latent_modes, num_episodes, seed, env_fn, eval_type="qualitative"):
-    # expert_file_names = [name + '_128x4' for name in experts]
-    # pi_types = ['policy', 'policy', 'demo']
 
     # Initialize trajectory collection
     images_traj, images_actions, expert_path_images, expert_action_images, expert_policies = [], [], [], [], []
@@ -914,6 +917,7 @@ def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
         # Run Expert episodes
         for exp in range(len(experts)):
             type = pi_types[exp]
+            e_name = experts[exp]
             if type == 'policy':
                 _, expert_pi = load_policy_and_env(
                     osp.join(_root_data_path, expert_file_names[exp], expert_file_names[exp] + '_s0/'),
@@ -921,8 +925,13 @@ def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
             else:
                 def circle_policy_func(o):
                     return circle_policy
+                def forward_policy_func(o):
+                    return forward_policy
 
-                expert_pi = circle_policy_func
+                if e_name == "circle":
+                    expert_pi = circle_policy_func
+                else:
+                    expert_pi = forward_policy_func
 
             print("loop quant exp no", exp)
             print("expert names: ", experts)
@@ -955,7 +964,9 @@ def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
 
     else:
         # Run expert episodes
+
         for exp in range(len(experts)):
+            e_name = experts[exp]
             mode = pi_types[exp]
             if mode == 'policy':
                 _, expert_pi = load_policy_and_env(
@@ -965,7 +976,13 @@ def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
                 def circle_policy_func(o):
                     return circle_policy
 
-                expert_pi = circle_policy_func
+                def forward_policy_func(o):
+                    return forward_policy
+
+                if e_name == "circle":
+                    expert_pi = circle_policy_func
+                else:
+                    expert_pi = forward_policy_func
 
             ExpertActions[exp], ExpertPos[exp], ExpertGoalPos[exp], FirstGoalPos[exp], FirstHazardsPos[exp] = \
                 (run_memo_policies(env, expert_pi, max_ep_len=1000, latent_modes=latent_modes,
@@ -998,7 +1015,9 @@ def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
 
             # Calculate SSPD distances from actions (might change this to actual paths later)
             for i in range(len(experts)):
-                ExpertTrajDistances[i].append(tdist.sspd(np.row_stack(ExpertActions[i]).astype('float64'), learner_actions))
+                ExpertTrajDistances[i].append(
+                    tdist.sspd(np.row_stack(ExpertPos[i]).astype('float64'), learner_trajectory))
+                # ExpertTrajDistances[i].append(tdist.sspd(np.row_stack(ExpertActions[i]).astype('float64'), learner_actions))
                 ExpertTrajData[i] = [[label, val] for (label, val) in zip(traj_labels, ExpertTrajDistances[i])]
 
             # Plot
@@ -1018,7 +1037,7 @@ def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
 
 
 def memo_full_eval(model, expert_names, file_names, pi_types, collated_memories, latent_modes,
-                   eval_modes, episodes_per_epoch, N_expert, eval_batch_size,
+                   eval_modes, episodes_per_epoch, quant_episodes, N_expert, eval_batch_size,
                    seed, logger_kwargs):
     '''
     :param model:
@@ -1084,7 +1103,7 @@ def memo_full_eval(model, expert_names, file_names, pi_types, collated_memories,
         expert_reward_images, expert_cost_images, learner_reward_images, learner_cost_images = \
             run_memo_eval(exp_name=logger_kwargs['exp_name'], experts=expert_names, expert_file_names=file_names,
                           pi_types=pi_types,
-                          num_episodes=5, latent_modes=latent_modes,
+                          num_episodes=quant_episodes, latent_modes=latent_modes,
                           seed=0, env_fn=lambda: gym.make('Safexp-PointGoal1-v0'),
                           eval_type="quantitative")
 
@@ -1285,6 +1304,47 @@ def setup_logger_kwargs(exp_name, seed=None, data_dir=None, datestamp=False):
 #     return str_v
 #
 #
+
+class NoamOpt:
+    "Optim wrapper that implements rate."
+
+    def __init__(self, model_size, warmup, optimizer):
+        self.optimizer = optimizer
+        self._step = 0
+        self.warmup = warmup
+        self.model_size = model_size
+        self._rate = 0
+
+    def state_dict(self):
+        """Returns the state of the warmup scheduler as a :class:`dict`.
+        It contains an entry for every variable in self.__dict__ which
+        is not the optimizer.
+        """
+        return {key: value for key, value in self.__dict__.items() if key != 'optimizer'}
+
+    def load_state_dict(self, state_dict):
+        """Loads the warmup scheduler's state.
+        Arguments:
+            state_dict (dict): warmup scheduler state. Should be an object returned
+                from a call to :meth:`state_dict`.
+        """
+        self.__dict__.update(state_dict)
+
+    def step(self):
+        "Update parameters and rate"
+        self._step += 1
+        rate = self.rate()
+        for p in self.optimizer.param_groups:
+            p['lr'] = rate
+        self._rate = rate
+        self.optimizer.step()
+
+    def rate(self, step=None):
+        "Implement `lrate` above"
+        if step is None:
+            step = self._step
+        return (self.model_size ** (-0.5) *
+                min(step ** (-0.5), step * self.warmup ** (-1.5)))
 
 class CostPOBuffer:
 
