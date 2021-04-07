@@ -56,6 +56,8 @@ class MemoryBatch:
         :return:
         '''
 
+
+
         for k in range(self.size):
             print("collating memories of size: ", self.size)
             expert_states, expert_actions, _, expert_costs, expert_next_states, _ = self.memories[k].sample(next=True)
@@ -95,7 +97,6 @@ class MemoryBatch:
             self.idx += 1
 
         # print("Final expert ids: ", self.expert_ids)
-
         return self.transition_states, self.pure_expert_states, self.transition_actions, self.expert_ids
 
 

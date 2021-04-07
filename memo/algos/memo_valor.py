@@ -83,8 +83,8 @@ def memo_valor(env_fn,
     logger.log('\nNumber of parameters: \t d: %d\n' % var_counts)
 
     # Optimizers
-    memo_optimizer = AdaBelief(memo.parameters(), lr=memo_lr, eps=1e-20, rectify=True)
-    # memo_optimizer = AdaBelief(memo.parameters(), lr=memo_lr, eps=1e-16, rectify=True)
+    # memo_optimizer = AdaBelief(memo.parameters(), lr=memo_lr, eps=1e-20, rectify=True)
+    memo_optimizer = AdaBelief(memo.parameters(), lr=memo_lr, eps=1e-16, rectify=True)
     # memo_optimizer = Adam(memo.parameters(), lr=memo_lr, betas=(0.9, 0.98), eps=1e-9)
 
     start_time = time.time()
@@ -151,6 +151,7 @@ def memo_valor(env_fn,
 
     print("Finished training, and detected %d contexts!" % len(memo.found_contexts))
     # wandb.finish()
+    print('memo type', memo)
     return memo, mem
 
 

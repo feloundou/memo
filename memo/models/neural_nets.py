@@ -56,7 +56,6 @@ class MLPGaussianActor(Actor):
 
         log_std = -0.5 * np.ones(act_dim, dtype=np.float32)
         self.log_std = nn.Parameter(torch.as_tensor(log_std))
-
         self.mu_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
     def _distribution(self, obs):
@@ -110,28 +109,14 @@ class MLPActorCritic(nn.Module):
         return self.step(obs)[0]
 
 
-class MEMOActor(nn.Module):
-    def __init__(self, state_dim, hidden_size, action_dim):
-        super(MEMOActor, self).__init__()
-        activation = nn.Tanh()
-        hidden_size = hidden_size[0]
 
-        self.mu_net = nn.Sequential(
-                        nn.Linear(state_dim, hidden_size),
-                        nn.Tanh(),
-                        nn.Linear(hidden_size, hidden_size),
-                        nn.Tanh(),
-                        nn.Linear(hidden_size, hidden_size),
-                        nn.Tanh(),
-                        nn.Linear(hidden_size, hidden_size),
-                        nn.Tanh(),
-                        nn.Linear(hidden_size, hidden_size),
-                        nn.Tanh(),
-                        nn.Linear(hidden_size, action_dim))
+class MEMOActor(nn.Module):
+    def __init__(self, state_dim, hidden_size, action_dim, activation=nn.Tanh):
+        super(MEMOActor, self).__init__()
 
         log_std = -0.5 * np.ones(action_dim, dtype=np.float32)
         self.log_std = nn.Parameter(torch.as_tensor(log_std))
-
+        self.mu_net = mlp([state_dim] + hidden_size + [action_dim], activation)
 
     def _distribution(self, obs):
         mu = self.mu_net(obs)
@@ -141,43 +126,7 @@ class MEMOActor(nn.Module):
     def forward(self, obs):
         mu = self.mu_net(obs)
         std = torch.exp(self.log_std)
-        if torch.isnan(mu).any():
-            print("i python", mu)
-            IPython.embed()
         return Normal(mu, std)
-
-
-class MEMOCritic(nn.Module):
-    def __init__(self, obs, hidden_size):
-        super(MEMOCritic, self).__init__()
-        self.fc1 = nn.Linear(obs, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, 1)
-
-        self.fc3.weight.data.mul_(0.1)
-        self.fc3.bias.data.mul_(0.0)
-
-    def forward(self, x):
-        x = torch.tanh(self.fc1(x))
-        x = torch.tanh(self.fc2(x))
-        v = self.fc3(x)
-        return v
-
-class GaussianActor(nn.Module):
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
-        super().__init__()
-        self.shared_net = mlp([obs_dim] + list(hidden_sizes), activation)
-        self.mu_net = nn.Linear(hidden_sizes[-1], act_dim)
-        # self.var_net = nn.Linear(hidden_sizes[-1], act_dim)
-        log_std = -0.5 * np.ones(act_dim, dtype=np.float32)
-        self.log_std = nn.Parameter(torch.as_tensor(log_std))
-
-    def forward(self, x):
-        mu = self.mu_net(F.leaky_relu(self.shared_net(x)))
-        # std = self.var_net(F.leaky_relu(self.shared_net(x)))
-        std = torch.exp(self.log_std)
-        # print("std", std)
-        return Normal(loc=mu, scale=std).rsample()
 
 
 # the critic is error here would be: reward + gamma*V(s_t+1)-V(s_t)
@@ -187,7 +136,7 @@ class GaussianActor(nn.Module):
 class MEMO(nn.Module):
     """Multiple Experts, Multiple Objectives;
     """
-    def __init__(self, obs_dim, out_dim, encoder_hidden, decoder_hidden, latent_modes):
+    def __init__(self, obs_dim, out_dim, encoder_hidden, decoder_hidden, actor_hidden, latent_modes):
         '''
         :param obs_dim:
         :param latent_dim:
@@ -206,13 +155,12 @@ class MEMO(nn.Module):
         self.prenet = nn.Linear(self.embedding_dim, self.embedding_dim)
         self.vector_quantizer = VectorQuantizer(self.num_embeddings, self.embedding_dim)
         self.postnet = nn.Linear(self.embedding_dim, encoder_hidden[-1])
-        self.vq_decoder = VQDecoder(encoder_hidden[-1], obs_dim)
+        self.vq_decoder = VQDecoder(encoder_hidden[-1], decoder_hidden, obs_dim)
 
-        self.action_decoder = MEMOActor(state_dim=obs_dim + self.latent_modes, hidden_size=decoder_hidden, action_dim=out_dim)
+        self.action_decoder = MEMOActor(state_dim=obs_dim + self.latent_modes, hidden_size=actor_hidden, action_dim=out_dim)
         # self.action_gaussian = GaussianActor(obs_dim=obs_dim + self.latent_modes, act_dim=out_dim,
         #                                      hidden_sizes=[128]*4, activation=nn.LeakyReLU)
         self.action_vq_dist = None
-        # self.logp_old = None
 
 
     def compute_quantized_loss(self, state, delta_state, actions):
@@ -241,9 +189,8 @@ class MEMO(nn.Module):
         categorical_proposal_reshape = torch.reshape(categorical_proposal, (-1, 1))
         categorical_proposal_onehot = F.one_hot(categorical_proposal_reshape, self.latent_modes).squeeze().float()
 
-        # IPython.embed()
-        # concat_state_vq = torch.cat([state, categorical_proposal_onehot], dim=-1)
-        concat_state_vq = torch.cat([state, categorical_proposal_prob], dim=-1)
+        concat_state_vq = torch.cat([state, categorical_proposal_onehot], dim=-1)
+        # concat_state_vq = torch.cat([state, categorical_proposal_prob], dim=-1)
         action_vq_dist = self.action_decoder(concat_state_vq)
 
         return encoder_output, quantized, reconstruction, categorical_proposal, action_vq_dist
@@ -274,32 +221,10 @@ class MEMO(nn.Module):
         vq_total_loss, recons_loss, vq_loss, commitment_loss = vq_criterion(Delta_X, encoder_output, quantized, reconstruction)
 
         # original formula
-        # # Policy loss
-        # pi, logp = action_vq_dist(concat_state, A)
-        # ratio = torch.exp(logp - logp_old)
-        # clip_adv = torch.clamp(ratio, 1 - clip_ratio, 1 + clip_ratio) * adv
-        # loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
-        # logp_new = action_vq_dist.log_prob(A).sum(axis=-1)
-
-        # try to get the exp before summing the higher the log prob, the lower the loss
-        # this loss is best for now
-        loss_pi = (torch.tensor(1.)/(torch.exp(action_vq_dist.log_prob(A)) + torch.tensor(0.1))).sum(axis=-1)  # fairly stable (revert to this and eps=1e-20 for this type of run:
-
-
-        # https: // wandb.ai / openai - scholars / MEMO / runs / sojcx0yn?workspace = user - feloundou
-        # loss_pi = (torch.tensor(1.) / (torch.exp(action_vq_dist.log_prob(A)) + torch.tensor(0.9))).sum(axis=-1)   # stable too, lower bound at 0.5
-        # loss_pi = (torch.tensor(1.)/(torch.exp(action_vq_dist.log_prob(A)).sum(axis=-1) + torch.tensor(1.)))  ## do not use
-        # loss_pi = (torch.tensor(1.) / (torch.exp(action_vq_dist.log_prob(A).sum(axis=-1)) + torch.tensor(1.))) ## do not use
-        # loss_pi = (torch.tensor(1.) / (torch.clamp(torch.exp(action_vq_dist.log_prob(A).sum(axis=-1)), min=0.1, max=1e5))) # do not use
-
-        # loss_val = torch.exp(action_vq_dist.log_prob(A)).sum(axis=-1)
-        # clip_loss = 0.1
-        # loss_pi = (torch.tensor(1.)/torch.clamp(loss_val, 1 - clip_loss, 1e8))
-
-        # add the epsilon above to avoid under/over flow issues
-        # loss_pi = torch.exp(logp_new)
-        # loss_pi = -torch.exp(logp_new - self.logp_old)
-        # loss_pi = torch.as_tensor(1.)/torch.exp(logp_new)   # if logp is high, loss should be low
+        # try to get the exp before summing the higher the log prob, the lower the loss# this loss is best for now
+        # loss_pi = -torch.exp(action_vq_dist.log_prob(A).sum(axis=-1))
+        loss_pi = (torch.tensor(1.)/(torch.exp(action_vq_dist.log_prob(A)) + torch.tensor(0.1))).sum(axis=-1)  # fairly stable (revert to this and eps=1e-20 for this type of run:https://wandb.ai/openai-scholars/MEMO/runs/sojcx0yn?workspace=user-feloundou
+ 
         # recon_loss = 2 -torch.exp(action_vq_dist.log_prob(A).sum(axis=-1)) # this is hilariously wrong. Quite the opposite, actually.
         loss = loss_pi * vq_total_loss
 
@@ -311,21 +236,21 @@ class MEMO(nn.Module):
 class VQEncoder(nn.Module):
     def __init__(self, in_dim, out_dim):
         super(VQEncoder, self).__init__()
-        # self.net = nn.Sequential(
-        #     nn.Linear(in_dim, out_dim // 2),
-        #     nn.Tanh(),  # much better than relu
-        #     nn.Linear(out_dim // 2, out_dim),
-        #     nn.Tanh()
-        # )
-
         self.net = nn.Sequential(
-            nn.Linear(in_dim, out_dim),
+            nn.Linear(in_dim, out_dim // 2),
             nn.Tanh(),
-            nn.Linear(out_dim, out_dim),
-            nn.Tanh(),
-            nn.Linear(out_dim, out_dim),
+            nn.Linear(out_dim // 2, out_dim),
             nn.Tanh()
         )
+
+        # self.net = nn.Sequential(
+        #     nn.Linear(in_dim, out_dim),
+        #     nn.Tanh(),
+        #     nn.Linear(out_dim, out_dim),
+        #     nn.Tanh(),
+        #     nn.Linear(out_dim, out_dim),
+        #     nn.Tanh()
+        # )
 
     def forward(self, input):
         return self.net(input)
@@ -341,29 +266,17 @@ class Clamper(nn.Module):
         return torch.clamp(input, self.min, self.max)
 
 class VQDecoder(nn.Module):
-    def __init__(self, obs_dim, out_dim):
+    def __init__(self, obs_dim, hidden_dim, out_dim, activation=nn.Tanh):
         super().__init__()
-        test_size = 10
-
-        self.net = nn.Sequential(
-            nn.Tanh(),
-            nn.Linear(obs_dim, test_size),
-            nn.Tanh(),
-            nn.Linear(test_size, test_size),
-            nn.Tanh(),
-            nn.Linear(test_size, test_size),
-            nn.Tanh(),
-            nn.Linear(test_size, out_dim),
-            nn.Tanh()
-        )
+        self.initial_act = nn.Tanh()
+        self.net = mlp([obs_dim] + hidden_dim + [out_dim], activation)
     def forward(self, input):
-        return self.net(input)
+        return self.net(self.initial_act(input))
 
 
 class VectorQuantizer(nn.Module):
     def __init__(self, num_embeddings, embedding_dim):
         super().__init__()
-
         self.num_embeddings = num_embeddings  # E_N
         self.embedding_dim = embedding_dim    # E_D
         self.embeddings = nn.Embedding(num_embeddings, embedding_dim)
@@ -378,16 +291,9 @@ class VectorQuantizer(nn.Module):
         distances = (flatten_input ** 2).sum(dim=1, keepdim=True) # [B, 1]
         distances = distances + (self.embeddings.weight ** 2).sum(dim=1) # [B, E_N]
         distances -= 2 * flatten_input @ self.embeddings.weight.t()  # [B, E_N]
-        # print("distances: ", distances)
 
         categorical_posterior = torch.argmin(distances, dim=-1) # [B]  # original
         categorical_posterior_prob = distances
-
-        if torch.isnan(categorical_posterior).any():
-            IPython.embed()
-
-        if torch.isnan(categorical_posterior_prob).any():
-            IPython.embed()
 
         return categorical_posterior, categorical_posterior_prob
 
@@ -517,149 +423,4 @@ class TanhNormal(torch.distributions.Distribution):
         else:
             return torch.tanh(z)
 
-
-class PEARLAgent(nn.Module):
-
-    def __init__(self,
-                 latent_dim,
-                 context_encoder,
-                 policy,
-                 **kwargs
-    ):
-        super().__init__()
-        self.latent_dim = latent_dim
-
-        self.context_encoder = context_encoder
-        self.policy = policy
-
-        self.recurrent = kwargs['recurrent']
-        self.use_ib = kwargs['use_information_bottleneck']
-        self.sparse_rewards = kwargs['sparse_rewards']
-        self.use_next_obs_in_context = kwargs['use_next_obs_in_context']
-
-        # initialize buffers for z dist and z
-        # use buffers so latent context can be saved along with model weights
-        self.register_buffer('z', torch.zeros(1, latent_dim))
-        self.register_buffer('z_means', torch.zeros(1, latent_dim))
-        self.register_buffer('z_vars', torch.zeros(1, latent_dim))
-
-        self.clear_z()
-
-    def clear_z(self, num_tasks=1):
-        '''
-        reset q(z|c) to the prior
-        sample a new z from the prior
-        '''
-        # reset distribution over z to the prior
-        mu = ptu.zeros(num_tasks, self.latent_dim)
-        if self.use_ib:
-            var = ptu.ones(num_tasks, self.latent_dim)
-        else:
-            var = ptu.zeros(num_tasks, self.latent_dim)
-        self.z_means = mu
-        self.z_vars = var
-        # sample a new z from the prior
-        self.sample_z()
-        # reset the context collected so far
-        self.context = None
-        # reset any hidden state in the encoder network (relevant for RNN)
-        self.context_encoder.reset(num_tasks)
-
-    def detach_z(self):
-        ''' disable backprop through z '''
-        self.z = self.z.detach()
-        if self.recurrent:
-            self.context_encoder.hidden = self.context_encoder.hidden.detach()
-
-    # def update_context(self, inputs):
-    #     ''' append single transition to the current context '''
-    #     o, a, r, no, d, info = inputs
-    #     if self.sparse_rewards:
-    #         r = info['sparse_reward']
-    #     o = ptu.from_numpy(o[None, None, ...])
-    #     a = ptu.from_numpy(a[None, None, ...])
-    #     r = ptu.from_numpy(np.array([r])[None, None, ...])
-    #     no = ptu.from_numpy(no[None, None, ...])
-    #
-    #     if self.use_next_obs_in_context:
-    #         data = torch.cat([o, a, r, no], dim=2)
-    #     else:
-    #         data = torch.cat([o, a, r], dim=2)
-    #     if self.context is None:
-    #         self.context = data
-    #     else:
-    #         self.context = torch.cat([self.context, data], dim=1)
-
-    # def compute_kl_div(self):
-    #     ''' compute KL( q(z|c) || r(z) ) '''
-    #     prior = torch.distributions.Normal(ptu.zeros(self.latent_dim), ptu.ones(self.latent_dim))
-    #     posteriors = [torch.distributions.Normal(mu, torch.sqrt(var)) for mu, var in zip(torch.unbind(self.z_means), torch.unbind(self.z_vars))]
-    #     kl_divs = [torch.distributions.kl.kl_divergence(post, prior) for post in posteriors]
-    #     kl_div_sum = torch.sum(torch.stack(kl_divs))
-    #     return kl_div_sum
-
-    # def infer_posterior(self, context):
-    #     ''' compute q(z|c) as a function of input context and sample new z from it'''
-    #     params = self.context_encoder(context)
-    #     params = params.view(context.size(0), -1, self.context_encoder.output_size)
-    #     # with probabilistic z, predict mean and variance of q(z | c)
-    #     if self.use_ib:
-    #         mu = params[..., :self.latent_dim]
-    #         sigma_squared = F.softplus(params[..., self.latent_dim:])
-    #         z_params = [_product_of_gaussians(m, s) for m, s in zip(torch.unbind(mu), torch.unbind(sigma_squared))]
-    #         self.z_means = torch.stack([p[0] for p in z_params])
-    #         self.z_vars = torch.stack([p[1] for p in z_params])
-    #     # sum rather than product of gaussians structure
-    #     else:
-    #         self.z_means = torch.mean(params, dim=1)
-    #     self.sample_z()
-
-    def sample_z(self):
-        if self.use_ib:
-            posteriors = [torch.distributions.Normal(m, torch.sqrt(s)) for m, s in zip(torch.unbind(self.z_means), torch.unbind(self.z_vars))]
-            z = [d.rsample() for d in posteriors]
-            self.z = torch.stack(z)
-        else:
-            self.z = self.z_means
-
-    def get_action(self, obs, deterministic=False):
-        ''' sample action from the policy, conditioned on the task embedding '''
-        z = self.z
-        obs = ptu.from_numpy(obs[None])
-        in_ = torch.cat([obs, z], dim=1)
-        return self.policy.get_action(in_, deterministic=deterministic)
-
-    def set_num_steps_total(self, n):
-        self.policy.set_num_steps_total(n)
-
-    def forward(self, obs, context):
-        ''' given context, get statistics under the current policy of a set of observations '''
-        self.infer_posterior(context)
-        self.sample_z()
-
-        task_z = self.z
-
-        t, b, _ = obs.size()
-        obs = obs.view(t * b, -1)
-        task_z = [z.repeat(b, 1) for z in task_z]
-        task_z = torch.cat(task_z, dim=0)
-
-        # run policy, get log probs and new actions
-        in_ = torch.cat([obs, task_z.detach()], dim=1)
-        policy_outputs = self.policy(in_, reparameterize=True, return_log_prob=True)
-
-        return policy_outputs, task_z
-
-    def log_diagnostics(self, eval_statistics):
-        '''
-        adds logging data about encodings to eval_statistics
-        '''
-        z_mean = np.mean(np.abs(ptu.get_numpy(self.z_means[0])))
-        z_sig = np.mean(ptu.get_numpy(self.z_vars[0]))
-        eval_statistics['Z mean eval'] = z_mean
-        eval_statistics['Z variance eval'] = z_sig
-
-    @property
-    def networks(self):
-        return [self.context_encoder, self.policy]
 

@@ -11,6 +11,12 @@ from plotnine import ggplot, geom_path, geom_line, geom_point, \
     element_line, element_blank, labs, scale_color_identity, scale_fill_manual, scale_color_manual
 import torch
 import os.path as osp, time, atexit, os
+from plotnine import *
+from plotnine.animation import PlotnineAnimation
+
+# for animation in the notebook
+from matplotlib import rc
+rc('animation', html='html5')
 
 # import torch.nn.functional as F
 from mpi4py import MPI
@@ -19,21 +25,10 @@ import traj_dist.distance as tdist
 from memo.algos.demo_policies import spinning_top_policy, circle_policy, square_policy, \
     forward_policy, back_forth_policy, forward_spin_policy
 
-# from run_policy_sim_ppo import load_policy_and_env
-# from ppo_algos import *
-#
-# from memo.models.neural_nets import *
-# from torch import nn
 import gym
 import wandb.plot as wplot
 import scipy
 
-
-
-# import string
-#
-#
-#
 
 # Where experiment outputs are saved by default:
 DEFAULT_DATA_DIR = osp.join(osp.abspath(osp.dirname(osp.dirname(__file__))),'data')
@@ -252,7 +247,6 @@ def load_pytorch_policy(fpath, itr, deterministic=False, type='ppo', demo_pi=[-1
             return action
 
     # make function for producing an action given a single state
-
     # investigate accuracy of normal distributions
     return get_action
 
@@ -788,10 +782,13 @@ def run_memo_policies(env, get_action, context_label=0, latent_modes=None, max_e
 
         context_one_hot = F.one_hot(torch.as_tensor(context_label), latent_modes)
         context_zero_hot = torch.tensor(1.) - context_one_hot
+        context_ten_hot = context_zero_hot*torch.tensor(10.)
+        context_two_hot = context_zero_hot * torch.tensor(2.)
 
         # a = get_action(o, F.one_hot(torch.as_tensor(context_label), latent_modes)) if mode == "student" else get_action(o)
-        a = get_action(o, context_zero_hot) if mode == "student" else get_action(o)
-        # a = get_action(o, context_one_hot) if mode == "student" else get_action(o)
+        # a = get_action(o, context_zero_hot) if mode == "student" else get_action(o)
+        a = get_action(o, context_one_hot) if mode == "student" else get_action(o)
+        # a = get_action(o, context_two_hot) if mode == "student" else get_action(o)
 
         actions.append(a)
         bot_pos.append(env.robot_pos[:2])
@@ -829,6 +826,33 @@ orange = '#FF8000'
 yellow = '#FFFF33'
 white  = '#FFFFFF'
 
+
+def _ani_plot(k, df, goals, hazards):
+    # IPython.embed()
+    df_final = df
+    df_aux = df[:int(k)]
+
+    # geom_path(aes(colour='df_final.index'), size=1.5)
+    p = (ggplot(data=df_aux) + aes(x="x", y="y") + geom_path(size=1.5) +
+            scale_color_cmap('spring') + labs(x="X", y="Y") +
+            geom_point(data=pd.DataFrame(np.row_stack(goals), columns=["x", "y"]),
+                       mapping=aes(x="x", y="y"), fill='cyan', alpha=0.5, size=15, show_legend=False)+
+            geom_point(data=pd.DataFrame(np.row_stack(hazards), columns=["x", "y", "z"]),
+                       mapping=aes(x="x", y="y"), fill='red', alpha=0.5, size=10, show_legend=False) +
+            theme(rect=element_rect(color=white,  fill="#1C1B4B"),  text=element_text(color=white, weight='bold'),
+                  legend_position='none'))
+    return p
+
+
+def _path_plot_animate(df, goals, hazards, kmin, kmax, num_frames, dir, name):
+    # It is better to use a generator instead of a list
+    plots = (_ani_plot(k, df, goals, hazards,) for k in np.linspace(kmin, kmax, num_frames))
+    ani = PlotnineAnimation(plots, interval=100, repeat_delay=500)
+    # ani.save('/tmp/animation.mp4')
+    ani.save(osp.join(dir, name))
+    # ani
+    return ani
+
 def _path_plot_helper(dir, name, df, goals=None, hazards=None):
     # IPython.embed()
     plot = (ggplot(data=df) + aes(x="x", y="y") + geom_path(aes(colour='df.index'), size=1.5) +
@@ -838,10 +862,14 @@ def _path_plot_helper(dir, name, df, goals=None, hazards=None):
             geom_point(data=pd.DataFrame(np.row_stack(hazards), columns=["x", "y", "z"]),
                        mapping=aes(x="x", y="y"), fill='red', alpha=0.5, size=10, show_legend=False) +
             theme(rect=element_rect(color=white,  fill="#1C1B4B"),  text=element_text(color=white, weight='bold'),
-                  legend_position='top', legend_direction='horizontal',
-    legend_key_width=30, legend_key_height=20, legend_title=element_blank()))
+    #               legend_position='top', legend_direction='horizontal',
+    # legend_key_width=30, legend_key_height=20, legend_title=element_blank()))
+                  legend_position='none'))
 
-    plot.save(osp.join(dir, name), dpi=100)
+    # remove the legend
+
+
+    plot.save(osp.join(dir, name), dpi=600)
     path_image = Image.open(osp.join(dir, name))
     # IPython.embed()
     return path_image
@@ -849,7 +877,7 @@ def _path_plot_helper(dir, name, df, goals=None, hazards=None):
 def _line_plot_helper(dir, name, df):
     plot = (ggplot(df) + aes(x="y", y="x") + geom_line(color='yellow',size=1.5) +
             theme(rect=element_rect(color=white, fill="#1C1B4B")))
-    plot.save(osp.join(dir, name), dpi=100)
+    plot.save(osp.join(dir, name), dpi=600)
     path_image = Image.open(osp.join(dir, name))
     return path_image
 
@@ -988,7 +1016,14 @@ def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
                 (run_memo_policies(env, expert_pi, max_ep_len=1000, latent_modes=latent_modes,
                                    num_episodes=num_episodes, mode="expert", render=False, env_seed=config_seed))
 
-            exp_path_image = _path_plot_helper(dir=_image_path, name=experts[exp] + '_robot_path.png', df=pd.DataFrame(np.row_stack(ExpertPos[exp]), columns=["x", "y"],),
+            # exp_path_animate = _path_plot_animate(df=pd.DataFrame(np.row_stack(ExpertPos[exp]), columns=["x", "y"]),
+            #                                       goals=ExpertGoalPos[exp],
+            #                                       hazards=FirstHazardsPos[exp],
+            #                                       kmin=1, kmax=1000, num_frames=50, dir=_image_path,
+            #                                       name=experts[exp] + '_robot_path.mp4')
+
+            exp_path_image = _path_plot_helper(dir=_image_path, name=experts[exp] + '_robot_path.png',
+                                               df=pd.DataFrame(np.row_stack(ExpertPos[exp]), columns=["x", "y"], ),
                                                goals=ExpertGoalPos[exp],
                                                hazards=FirstHazardsPos[exp],
                                                )
@@ -1038,7 +1073,7 @@ def run_memo_eval(exp_name, experts, expert_file_names, pi_types,
 
 def memo_full_eval(model, expert_names, file_names, pi_types, collated_memories, latent_modes,
                    eval_modes, episodes_per_epoch, quant_episodes, N_expert, eval_batch_size,
-                   seed, logger_kwargs):
+                   seed, logger_kwargs, logging=None):
     '''
     :param model:
     :param collated_memories:
@@ -1051,6 +1086,9 @@ def memo_full_eval(model, expert_names, file_names, pi_types, collated_memories,
     :param logger_kwargs:
     :return:
     '''
+    if logging is not None:
+        wandb.init(project="MEMO", group='Eval', config=locals())
+
     # evaluation mode check
     allowed_modes = ['class', 'policy', 'quantitative']
     for m in eval_modes:
@@ -1062,6 +1100,8 @@ def memo_full_eval(model, expert_names, file_names, pi_types, collated_memories,
         model.eval()
 
         # Randomize and fetch an evaluation sample
+        print("collated memories", collated_memories)
+        print("N expert", N_expert)
         eval_raw_states_batch, eval_delta_states_batch, eval_actions_batch, eval_sampled_experts = \
             collated_memories.eval_batch(N_expert, eval_batch_size, episodes_per_epoch)
 
