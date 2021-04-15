@@ -40,9 +40,10 @@ class Buffer:
 
 
 class MemoryBatch:
-    def __init__(self, memories):
+    def __init__(self, memories, step=1):
         super(MemoryBatch, self).__init__()
         self.idx = 0
+        self.step = step
         self.memories = memories
         self.size = len(memories)
         self.transition_states = None
@@ -53,30 +54,26 @@ class MemoryBatch:
     def collate(self):
         '''
         Collates trajectories/episodes/memories from different experts
+
         :return:
         '''
-
-
-
         for k in range(self.size):
-            print("collating memories of size: ", self.size)
+            print("collating memories with step size: ", self.step)
             expert_states, expert_actions, _, expert_costs, expert_next_states, _ = self.memories[k].sample(next=True)
-            print("Episode costs: ", torch.cumsum(expert_costs, dim=-1))
-            print("Memory size: ", expert_states.shape)
 
             # Exclude the last step of each episode to calculate state differences
             t_states = torch.stack(
-                [expert_next_states[i] - expert_states[i] for episode in self.memories[k] for i in
-                 range(len(episode) - 1)])
+                [expert_states[i+self.step] - expert_states[i] for episode in self.memories[k] for i in
+                 range(len(episode) - self.step)])
             t_actions = torch.stack(
-                [expert_actions[i] for episode in self.memories[k] for i in range(len(episode) - 1)])
+                [expert_actions[i] for episode in self.memories[k] for i in range(len(episode) - self.step)])
 
             # Three basic checks
             assert t_states.shape[0] == t_actions.shape[
                 0], "Tensors for state transitions and actions should be same on dim 0"
             assert torch.equal(expert_next_states[0],
                                expert_states[1]), "The i+1 state tensors should match the i next_state tensors"
-            assert torch.equal(expert_states[1] - expert_states[0],
+            assert torch.equal(expert_states[self.step] - expert_states[0],
                                t_states[0]), "Check your transition calculations"
 
             if self.transition_states is None:
@@ -94,10 +91,13 @@ class MemoryBatch:
                 e_ids = torch.empty(t_states.shape[0]).fill_(self.idx)
                 self.expert_ids = torch.cat([self.expert_ids, e_ids])
 
+            print("length: ", self.expert_ids.shape)
+
             self.idx += 1
 
         # print("Final expert ids: ", self.expert_ids)
         return self.transition_states, self.pure_expert_states, self.transition_actions, self.expert_ids
+
 
 
     def eval_batch(self, N_expert, eval_batch_size, episodes_per_epoch):
@@ -106,8 +106,8 @@ class MemoryBatch:
 
         for i in range(len(self.memories)):
             curb_factor = episodes_per_epoch
-            win_low = i * (N_expert - curb_factor)
-            win_high = (i + 1) * (N_expert - curb_factor)
+            win_low = i * (N_expert - curb_factor*self.step)
+            win_high = (i + 1) * (N_expert - curb_factor*self.step)
 
             b_index = torch.randint(low=win_low, high=win_high, size=(eval_batch_size,))
 

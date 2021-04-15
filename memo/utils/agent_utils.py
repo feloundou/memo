@@ -1,11 +1,10 @@
 from abc import ABC, abstractmethod
-from memo.algos.demo_policies import spinning_top_policy, circle_policy, square_policy, \
-    forward_policy, back_forth_policy, forward_spin_policy
+from memo.algos.demo_policies import spinning_top_policy, circle_policy
 
 # from cpprb import ReplayBuffer, create_before_add_func
 import wandb
 import os.path as osp
-from memo.utils.buffer_torch import Trajectory, Buffer
+from memo.utils.buffer_utils import Trajectory, Buffer
 
 import numpy as np
 import torch
@@ -14,7 +13,7 @@ import os, time, pickle
 #
 from memo.models.neural_nets import MLPActorCritic
 from torch.optim import Adam
-from memo.utils.torch_cpo_utils import ExpertSinglePathSimulator
+from memo.utils.simulator_utils import ExpertSinglePathSimulator
 #
 # # from ppo_algos import MLPActorCritic
 #

@@ -11,7 +11,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 
 from memo.models.neural_nets import MEMO
-from memo.utils.buffer_torch import MemoryBatch
+from memo.utils.buffer_utils import MemoryBatch
 from memo.utils.utils import proc_id, num_procs, EpochLogger, \
     setup_pytorch_for_mpi, sync_params, mpi_avg_grads, count_vars, \
     frange_cycle_sigmoid, NoamOpt
@@ -23,10 +23,11 @@ def memo_valor(env_fn,
                   memo_kwargs=dict(),
                   annealing_kwargs=dict(),
                   seed=0,
-                  episodes_per_epoch=40,
+                  episodes_per_expert=40,
                   epochs=50,
-                  warmup=10,
+                  # warmup=10,
                   train_iters=5,
+                  step_size=5,
                   memo_lr=1e-3,
                   train_batch_size=50,
                   eval_batch_size=200,
@@ -71,7 +72,7 @@ def memo_valor(env_fn,
 
     # Sync params across processes
     sync_params(memo)
-    N_expert = episodes_per_epoch*max_ep_len
+    N_expert = episodes_per_expert*max_ep_len
     print("N Expert: ", N_expert)
 
     # Buffer
@@ -90,8 +91,9 @@ def memo_valor(env_fn,
     start_time = time.time()
 
     # Prepare data
-    mem = MemoryBatch(memories)
+    mem = MemoryBatch(memories, step=step_size)
 
+    # transition_states, pure_states, transition_actions, expert_ids = mem.collate()
     transition_states, pure_states, transition_actions, expert_ids = mem.collate()
     total_l_old, recon_l_old, context_l_old = 0, 0, 0
 
@@ -107,18 +109,13 @@ def memo_valor(env_fn,
         raw_states_batch, delta_states_batch, actions_batch, sampled_experts = \
            pure_states[batch_indexes], transition_states[batch_indexes], transition_actions[batch_indexes], expert_ids[batch_indexes]
 
-        # print("Expert IDs: ", sampled_experts)
-        recon_gamma = epoch < warmup
-        # set log p old before training
-        # memo.logp_old = torch.as_tensor(0.)
 
-        # for i in range(train_iters):
         for i in range(local_iter_per_epoch):
             # kl_beta = kl_beta_schedule[epoch]
             kl_beta = 1
             # only take context labeling into account for first label
             loss, recon_loss, X, latent_labels, vq_loss = memo(raw_states_batch, delta_states_batch,  actions_batch,
-                                                                     kl_beta, recon_gamma)
+                                                                     kl_beta)
             memo_optimizer.zero_grad()
             loss.mean().backward()
             mpi_avg_grads(memo)

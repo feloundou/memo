@@ -3,15 +3,12 @@ import joblib
 import os
 import os.path as osp
 import gym
-import safety_gym
 from cpprb import ReplayBuffer
-import pandas as pd
-from random import randint
 import pickle
 import wandb
 import numpy as np
 import torch
-# from safety_gym.envs.engine import Engine
+
 from memo.utils.utils import EpochLogger, num_procs
 
 
@@ -69,8 +66,6 @@ def load_pytorch_policy(fpath, itr, deterministic=False, type='ppo'):
         def get_action(x,c):
             with torch.no_grad():
                 x = torch.as_tensor(x, dtype=torch.float32)
-                # print("X is: ", x)
-                # print("Internal model is: ", model[0])
                 vaelor=model[0]
                 action = vaelor.act(x, c)
             return action
@@ -85,9 +80,7 @@ def load_pytorch_policy(fpath, itr, deterministic=False, type='ppo'):
             return action
 
     # make function for producing an action given a single state
-
-    # # investigate accuracy of normal distributions
-
+    # investigate accuracy of normal distributions
 
     return get_action
 
@@ -177,8 +170,6 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
 
             expert_metrics = {log_prefix + 'episode return': ep_ret,
                               log_prefix + 'episode cost': ep_cost,
-                              # 'cumulative return': cum_ret,
-                              # 'cumulative cost': cum_cost,
                               log_prefix + '25ep mov avg return': mov_avg_ret,
                               log_prefix + '25ep mov avg cost': mov_avg_cost
                               }
@@ -225,15 +216,8 @@ if __name__ == '__main__':
     parser.add_argument('--deterministic', '-d', action='store_true')
     args = parser.parse_args()
 
-    # the safe trained file is ppo_500e_8hz_cost5_rew1_lim25
-
-    # file_name = 'ppo_500e_8hz_cost5_rew1_lim25'
     file_name = 'ppo_penalized_test'  # second best
-    # file_name = 'ppo_penalized_cyan_500ep_8000steps'   # best so far
-    # file_name = 'cpo_500e_8hz_cost1_rew1_lim25'  # unconstrained
     config_name = 'cyan'
-    # file_name = 'ppo_penalized_' + config_name + '_20Ks_1Ke_128x4'
-    # file_name = 'ppo_penalized_cyan_20Ks_1Ke_128x4'
 
 
     base_path = '/home/tyna/Documents/safe-experts/data/'
@@ -241,7 +225,6 @@ if __name__ == '__main__':
 
 
     _, get_action = load_policy_and_env(osp.join(base_path, file_name, file_name + '_s0/'),
-    # '/home/tyna/Documents/openai/research-project/data/ppo_500e_8hz_cost1_rew1_lim25/ppo_500e_8hz_cost1_rew1_lim25_s0/',
                                         args.itr if args.itr >= 0 else 'last',
                                         args.deterministic)
 
@@ -251,7 +234,6 @@ if __name__ == '__main__':
     print("Just made env")
     env._seed = 0
     # run_policy(env, get_action, args.len, args.episodes, not (args.norender), record=False, data_path=base_path, config_name='cyan', max_len_rb)
-
     # run_policy(env, get_action, args.len, args.episodes, False, record=True, data_path=expert_path, config_name=config_name, max_len_rb=10000)
     run_policy(env, get_action, args.len, args.episodes, True, record=True, data_path=expert_path,
                config_name=config_name, max_len_rb=10000)

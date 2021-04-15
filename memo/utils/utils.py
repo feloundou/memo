@@ -22,8 +22,7 @@ rc('animation', html='html5')
 from mpi4py import MPI
 import traj_dist.distance as tdist
 
-from memo.algos.demo_policies import spinning_top_policy, circle_policy, square_policy, \
-    forward_policy, back_forth_policy, forward_spin_policy
+from memo.algos.demo_policies import spinning_top_policy, circle_policy, forward_policy
 
 import gym
 import wandb.plot as wplot
@@ -781,14 +780,11 @@ def run_memo_policies(env, get_action, context_label=0, latent_modes=None, max_e
             time.sleep(1e-3)
 
         context_one_hot = F.one_hot(torch.as_tensor(context_label), latent_modes)
-        context_zero_hot = torch.tensor(1.) - context_one_hot
-        context_ten_hot = context_zero_hot*torch.tensor(10.)
-        context_two_hot = context_zero_hot * torch.tensor(2.)
+        context_naught_hot = torch.tensor(1.) - context_one_hot
+        context_ten_hot = torch.tensor(10.) * context_naught_hot
 
-        # a = get_action(o, F.one_hot(torch.as_tensor(context_label), latent_modes)) if mode == "student" else get_action(o)
-        # a = get_action(o, context_zero_hot) if mode == "student" else get_action(o)
-        a = get_action(o, context_one_hot) if mode == "student" else get_action(o)
-        # a = get_action(o, context_two_hot) if mode == "student" else get_action(o)
+        a = get_action(o, context_naught_hot) if mode == "student" else get_action(o)
+        # a = get_action(o, context_ten_hot) if mode == "student" else get_action(o)
 
         actions.append(a)
         bot_pos.append(env.robot_pos[:2])
@@ -1097,6 +1093,7 @@ def memo_full_eval(model, expert_names, file_names, pi_types, collated_memories,
 
     if "class" in eval_modes:
         print("Running Classification Evaluation")
+        print("model here:", model)
         model.eval()
 
         # Randomize and fetch an evaluation sample

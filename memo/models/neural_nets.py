@@ -128,7 +128,6 @@ class MEMOActor(nn.Module):
         std = torch.exp(self.log_std)
         return Normal(mu, std)
 
-
 # the critic is error here would be: reward + gamma*V(s_t+1)-V(s_t)
 # http://incompleteideas.net/book/first/ebook/node66.html
 
@@ -188,9 +187,11 @@ class MEMO(nn.Module):
 
         categorical_proposal_reshape = torch.reshape(categorical_proposal, (-1, 1))
         categorical_proposal_onehot = F.one_hot(categorical_proposal_reshape, self.latent_modes).squeeze().float()
+        # total_max = torch.tensor(0.)
+        # print("distances max: ", max(total_max, torch.max(categorical_proposal_prob)))
 
-        concat_state_vq = torch.cat([state, categorical_proposal_onehot], dim=-1)
-        # concat_state_vq = torch.cat([state, categorical_proposal_prob], dim=-1)
+        # concat_state_vq = torch.cat([state, categorical_proposal_onehot], dim=-1)
+        concat_state_vq = torch.cat([state, categorical_proposal_prob], dim=-1)
         action_vq_dist = self.action_decoder(concat_state_vq)
 
         return encoder_output, quantized, reconstruction, categorical_proposal, action_vq_dist
@@ -221,11 +222,7 @@ class MEMO(nn.Module):
         vq_total_loss, recons_loss, vq_loss, commitment_loss = vq_criterion(Delta_X, encoder_output, quantized, reconstruction)
 
         # original formula
-        # try to get the exp before summing the higher the log prob, the lower the loss# this loss is best for now
-        # loss_pi = -torch.exp(action_vq_dist.log_prob(A).sum(axis=-1))
-        loss_pi = (torch.tensor(1.)/(torch.exp(action_vq_dist.log_prob(A)) + torch.tensor(0.1))).sum(axis=-1)  # fairly stable (revert to this and eps=1e-20 for this type of run:https://wandb.ai/openai-scholars/MEMO/runs/sojcx0yn?workspace=user-feloundou
- 
-        # recon_loss = 2 -torch.exp(action_vq_dist.log_prob(A).sum(axis=-1)) # this is hilariously wrong. Quite the opposite, actually.
+        loss_pi = (torch.tensor(1.)/(torch.exp(action_vq_dist.log_prob(A)) + torch.tensor(0.1))).sum(axis=-1)
         loss = loss_pi * vq_total_loss
 
         return loss, loss_pi, X, vq_latent_labels, vq_total_loss
@@ -294,6 +291,8 @@ class VectorQuantizer(nn.Module):
 
         categorical_posterior = torch.argmin(distances, dim=-1) # [B]  # original
         categorical_posterior_prob = distances
+        # categorical_posterior_prob = torch.clamp(distances, 0, 10)  # 10 is a hyperparameter
+        # categorical_posterior_prob = torch.clamp(distances, 0, 5)  # 5 is a hyperparameter
 
         return categorical_posterior, categorical_posterior_prob
 
