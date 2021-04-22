@@ -128,11 +128,12 @@ Here are the two experts we demo with. Note that they are in the same exact seed
 
 Here are the 4 modes corresponding to the 4 latent spaces, trained up to 100 epochs.
 
+<p float="left">
 <img src="https://github.com/feloundou/memo/blob/master/memo/images/learner_pos0.png" caption="Mode 0" width="175" height="125">
 <img src="https://github.com/feloundou/memo/blob/master/memo/images/learner_pos1.png" alt="Mode 1" width="175" height="125">
 <img src="https://github.com/feloundou/memo/blob/master/memo/images/learner_pos2.png" alt="Mode 2" width="175" height="125">
 <img src="https://github.com/feloundou/memo/blob/master/memo/images/learner_pos3.png" alt="Mode 3" width="175" height="125">
-
+</p>
 
 The corresponding Weights and Biases run can be found here: 
 https://wandb.ai/openai-scholars/MEMO/runs/2iwn428m?workspace=user-feloundou
