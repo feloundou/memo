@@ -4,9 +4,10 @@
  
 # MEMO
 
+<!--
 [![Paper](http://img.shields.io/badge/paper-arxiv.1001.2234-B31B1B.svg)](https://www.nature.com/articles/nature14539)
-[![Conference](http://img.shields.io/badge/NeurIPS-2021-4b44ce.svg)](https://papers.nips.cc/book/advances-in-neural-information-processing-systems-31-2018)
-
+[![Conference](http://img.shields.io/badge/NeurIPS-2019-4b44ce.svg)](https://papers.nips.cc/book/advances-in-neural-information-processing-systems-31-2018)
+-->
 <!--
 ARXIV   
 [![Paper](http://img.shields.io/badge/arxiv-math.co:1480.1111-B31B1B.svg)](https://www.nature.com/articles/nature14539)
@@ -19,7 +20,7 @@ Conference
 -->   
 </div>
  
-## Description   
+## Project 
 Multiple Experts, Multiple Objectives
 
 ## How to run   
@@ -89,7 +90,7 @@ forward_expert.run_expert_sim(env=env, get_from_file=fetch_data,
                              expert_episodes=100,  mode="demo", demo_pi=forward_policy,
                              seeds=[0, 444, 123, 999, 85, 4444, 64, 128, 808, 838])
 
-# 3. Collate memories (data loader for replay buffers)
+# Collate memories
 demo_memories = MemoryBatch([circle_expert.memory, forward_expert.memory], step=5)
 
 print("memories", demo_memories)
@@ -100,9 +101,7 @@ episodes_per_epoch_config=100
 train_batch_size_config=500
 eval_batch_size_config=100
 ep_len_config=1000
-seed_config = 0
-
-logger_kwargs = setup_logger_kwargs(memo_file_name, seed_config)
+logger_kwargs = setup_logger_kwargs(memo_file_name, 0)
 
 
 memo_full_eval(model=memo_model, expert_names=['circle', 'forward'],
@@ -113,7 +112,7 @@ memo_full_eval(model=memo_model, expert_names=['circle', 'forward'],
                eval_modes=['class', 'policy'],
                episodes_per_epoch=1000, quant_episodes=10,
                N_expert=episodes_per_epoch_config*ep_len_config,
-               eval_batch_size=eval_batch_size_config, seed=seed_config,
+               eval_batch_size=100, seed=0,
                logger_kwargs=logger_kwargs, logging='init')
 
 ```
@@ -121,12 +120,30 @@ memo_full_eval(model=memo_model, expert_names=['circle', 'forward'],
 ### Examples
 For demonstration purposes, I generate generic circle and forward moving agents, and k=4:
 
-The corresponding Weights and Biases run can be found here: https://wandb.ai/openai-scholars/MEMO/runs/2iwn428m?workspace=user-feloundou
+Here are the two experts we demo with. Note that they are in the same exact seeded environment:
+<img src="https://github.com/feloundou/memo/blob/master/memo/images/circle_robot_path.png" alt="Circle Expert" width="350" height="250">
+<img src="https://github.com/feloundou/memo/blob/master/memo/images/forward_robot_path.png" alt="Forward Expert" width="350" height="250">
+<!--![alt text](https://github.com/feloundou/memo/blob/master/memo/images/circle_robot_path.png?250x250)-->
+
+
+Here are the 4 modes corresponding to the 4 latent spaces, trained up to 100 epochs.
+
+<img src="https://github.com/feloundou/memo/blob/master/memo/images/learner_pos0.png" caption="Mode 0" width="175" height="125">
+<img src="https://github.com/feloundou/memo/blob/master/memo/images/learner_pos1.png" alt="Mode 1" width="175" height="125">
+<img src="https://github.com/feloundou/memo/blob/master/memo/images/learner_pos2.png" alt="Mode 2" width="175" height="125">
+<img src="https://github.com/feloundou/memo/blob/master/memo/images/learner_pos3.png" alt="Mode 3" width="175" height="125">
+
+
+The corresponding Weights and Biases run can be found here: 
+https://wandb.ai/openai-scholars/MEMO/runs/2iwn428m?workspace=user-feloundou
 
 You may train any custom agent using the usual methods (e.g. PPO, TRPO, etc...), then evaluate its path. One such sample script for a simple PPO expert can be found in **train_demo_experts.py**.
 
+
+### Tips
+
 Some tips:
-1. Experiment with the learning rate
+1. Experiment with the learning rate. Smaller learning rates can help stabilize learning. 
 2. Experiment with network size
 3. Experiment with k (embedding dimension)
 
@@ -134,7 +151,7 @@ Some tips:
 ```
 @article{Eloundou, Florentine,
   title={Multiple Experts, Multiple Objectives},
-  project={OpenAI Scholars Project},
+  project={OpenAI Scholars Program},
   year={2021}
 }
 ```   
