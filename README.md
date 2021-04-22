@@ -60,8 +60,11 @@ from memo.utils.utils import memo_full_eval, setup_logger_kwargs
 ENV_NAME = 'Safexp-PointGoal1-v0'
 env = gym.make(ENV_NAME)
 
-base_path = '/home/tyna/Documents/memo/memo/data/'
-memo_file_name = "2experts-4latents-memo-final-2500-step5"
+base_path = ''
+memo_file_name = ''
+
+episode_seeds = [0, 444, 123, 999, 85, 4444, 64, 128, 808, 838]
+
 latent_modes_config=5
 
 
@@ -83,12 +86,12 @@ circle_expert = Expert(config_name='circle', extension='-policy',
 circle_expert.run_expert_sim(env=env, get_from_file=fetch_data,
                              episode_split=[10, 10],
                              expert_episodes=100,mode="demo", replay_buffer_size=10000,
-                             seeds=[0, 444, 123, 999, 85, 4444, 64, 128, 808, 838])
+                             seeds=episode_seeds)
 
 forward_expert.run_expert_sim(env=env, get_from_file=fetch_data,
                              episode_split=[10, 10],
                              expert_episodes=100,  mode="demo", demo_pi=forward_policy,
-                             seeds=[0, 444, 123, 999, 85, 4444, 64, 128, 808, 838])
+                             seeds=episode_seeds)
 
 # Collate memories
 demo_memories = MemoryBatch([circle_expert.memory, forward_expert.memory], step=5)
