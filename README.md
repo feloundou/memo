@@ -5,7 +5,7 @@
 # MEMO
 
 [![Paper](http://img.shields.io/badge/paper-arxiv.1001.2234-B31B1B.svg)](https://www.nature.com/articles/nature14539)
-[![Conference](http://img.shields.io/badge/NeurIPS-2019-4b44ce.svg)](https://papers.nips.cc/book/advances-in-neural-information-processing-systems-31-2018)
+[![Conference](http://img.shields.io/badge/NeurIPS-2021-4b44ce.svg)](https://papers.nips.cc/book/advances-in-neural-information-processing-systems-31-2018)
 
 <!--
 ARXIV   
@@ -89,7 +89,7 @@ forward_expert.run_expert_sim(env=env, get_from_file=fetch_data,
                              expert_episodes=100,  mode="demo", demo_pi=forward_policy,
                              seeds=[0, 444, 123, 999, 85, 4444, 64, 128, 808, 838])
 
-# Collate memories
+# 3. Collate memories (data loader for replay buffers)
 demo_memories = MemoryBatch([circle_expert.memory, forward_expert.memory], step=5)
 
 print("memories", demo_memories)
@@ -100,7 +100,9 @@ episodes_per_epoch_config=100
 train_batch_size_config=500
 eval_batch_size_config=100
 ep_len_config=1000
-logger_kwargs = setup_logger_kwargs(memo_file_name, 0)
+seed_config = 0
+
+logger_kwargs = setup_logger_kwargs(memo_file_name, seed_config)
 
 
 memo_full_eval(model=memo_model, expert_names=['circle', 'forward'],
@@ -111,7 +113,7 @@ memo_full_eval(model=memo_model, expert_names=['circle', 'forward'],
                eval_modes=['class', 'policy'],
                episodes_per_epoch=1000, quant_episodes=10,
                N_expert=episodes_per_epoch_config*ep_len_config,
-               eval_batch_size=100, seed=0,
+               eval_batch_size=eval_batch_size_config, seed=seed_config,
                logger_kwargs=logger_kwargs, logging='init')
 
 ```
@@ -132,7 +134,6 @@ Some tips:
 ```
 @article{Eloundou, Florentine,
   title={Multiple Experts, Multiple Objectives},
-  author={Your team},
   project={OpenAI Scholars Project},
   year={2021}
 }
